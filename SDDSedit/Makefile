@@ -12,7 +12,7 @@ all: $(TARGET)
 $(TARGET): $(SRCS)
 	@mkdir -p $(CLSDIR)
 	$(JAVAC) -classpath $(CLSDIR) -d $(CLSDIR) $(SRCS)
-	$(JAR) cf $(TARGET) -C $(CLSDIR) .
+	$(JAR) cmf manifest $(TARGET) -C $(CLSDIR) SDDS/java/SDDSedit -C $(CLSDIR) SDDS/java/SDDS
 
 clean:
 	@rm -rf $(CLSDIR) $(TARGET)
