@@ -1,15 +1,18 @@
 JAVAC=javac
 JAR=jar
+LIBDIR=../javalib
+CLSDIR=$(LIBDIR)/SDDS
 SRCS=$(wildcard *.java)
-TARGET=SDDS.jar
+TARGET=$(LIBDIR)/SDDS.jar
 
 .PHONY: all clean
 
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
-	$(JAVAC) -d . $(SRCS)
-	$(JAR) cf $(TARGET) $(shell find . -type f -name "*.class")
+	@mkdir -p $(CLSDIR)
+	$(JAVAC) -d $(CLSDIR) $(SRCS)
+	$(JAR) cf $(TARGET) -C $(CLSDIR) .
 
 clean:
-	$(RM) $(TARGET) $(shell find . -type f -name "*.class")
+	@rm -rf $(CLSDIR) $(TARGET)
