@@ -16,7 +16,7 @@ foreach f $binFiles {
   exec chmod a-w $f
   exec cp -f $f $env(HOME)/rpmbuild/BUILD/${name}/
 }
-set jarFiles "../../../../javalib/SDDS.jar ../../../../javalib/SDDSedit.jar"
+set jarFiles "../javalib/SDDS.jar ../javalib/SDDSedit.jar"
 foreach f $jarFiles {
   exec chmod a+r $f
   exec chmod a-wx $f
