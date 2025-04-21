@@ -10,13 +10,13 @@ exec ./rpmdev-setuptree
 exec cp -f SDDSJava.spec $env(HOME)/rpmbuild/SPECS/
 exec rm -rf $env(HOME)/rpmbuild/BUILD/$name
 exec mkdir $env(HOME)/rpmbuild/BUILD/$name
-set binFiles "../SDDSedit/jsddsEdit ../SDDS3Dplot/jsdds3dplot"
+set binFiles "../SDDSedit/jsddsEdit"
 foreach f $binFiles {
   exec chmod a+rx $f
   exec chmod a-w $f
   exec cp -f $f $env(HOME)/rpmbuild/BUILD/${name}/
 }
-set jarFiles "../../../../javalib/SDDS.jar ../../../../javalib/SDDSedit.jar ../../../../javalib/SDDS3Dplot.jar visad.jar j3d-1_5_2-linux-amd64/lib/ext/j3dcore.jar j3d-1_5_2-linux-amd64/lib/ext/j3dutils.jar j3d-1_5_2-linux-amd64/lib/ext/vecmath.jar j3d-1_5_2-linux-amd64/lib/amd64/libj3dcore-ogl.so"
+set jarFiles "../../../../javalib/SDDS.jar ../../../../javalib/SDDSedit.jar"
 foreach f $jarFiles {
   exec chmod a+r $f
   exec chmod a-wx $f
