@@ -717,7 +717,6 @@ public class SDDSFile {
         final int quoteChar = 34;
         int header = 0;
         String name, symbol, units, description, format_string, group_name, fixed_value;
-        String associateName, associateFilename, associatePath, associateSdds;
         int type, field_length, dimensions;
         String token, line;
         int c;
@@ -725,7 +724,6 @@ public class SDDSFile {
         arrayCount = parameterCount = columnCount = 0;
         name = symbol = units = description = format_string = group_name = fixed_value = null;
         type = field_length = dimensions = 0;
-        associateName = associateFilename = associatePath = associateSdds = null;
 
         try {
             try {
@@ -1081,22 +1079,22 @@ public class SDDSFile {
                             c = st.nextToken();
                             if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
                                 break outer;
-                            associateName = st.sval;
+                            //associateName = st.sval;
                         } else if (token.equals("filename")) {
                             c = st.nextToken();
                             if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
                                 break outer;
-                            associateFilename = st.sval;
+                            //associateFilename = st.sval;
                         } else if (token.equals("path")) {
                             c = st.nextToken();
                             if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
                                 break outer;
-                            associatePath = st.sval;
+                            //associatePath = st.sval;
                         } else if (token.equals("sdds")) {
                             c = st.nextToken();
                             if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
                                 break outer;
-                            associateSdds = st.sval;
+                            //associateSdds = st.sval;
                         }
                         break;
                 }
@@ -1116,7 +1114,7 @@ public class SDDSFile {
      *         <code>false</code> if an error occurs
      */
     public boolean readBinaryData() {
-        int par, col, arr, row, page, rows, i, j, size, arraySize, dimCount = 0;
+        int row, page, rows, i, j, size, arraySize, dimCount = 0;
         int[] dim;
         long[][] longValues;
         double[][] doubleValues;
@@ -2416,7 +2414,7 @@ public class SDDSFile {
      * @param newname new name of the parameter
      */
     public void renameParameter(String oldname, String newname) {
-        int i, j;
+        int i;
         i = getParameterIndex(oldname);
         if (i == -1)
             return;
@@ -2430,7 +2428,7 @@ public class SDDSFile {
      * @param newname new name of the array
      */
     public void renameArray(String oldname, String newname) {
-        int i, j;
+        int i;
         i = getArrayIndex(oldname);
         if (i == -1)
             return;
@@ -2444,7 +2442,7 @@ public class SDDSFile {
      * @param newname new name of the column
      */
     public void renameColumn(String oldname, String newname) {
-        int i, j;
+        int i;
         i = getColumnIndex(oldname);
         if (i == -1)
             return;
@@ -6258,7 +6256,6 @@ public class SDDSFile {
      *         <code>false</code> if an error occured
      */
     public boolean writeLayout() {
-        String endian;
         try {
             dos.writeBytes("SDDS5\n");
             if (!writeDescription())
@@ -6372,7 +6369,6 @@ public class SDDSFile {
      *         <code>false</code> if an error occured
      */
     public boolean writeArrayHeader(int index) {
-        String line;
         if ((index < 0) || (index >= arrayCount)) {
             setError("invalid array index (writeArrayHeader)");
             return false;
@@ -6406,7 +6402,6 @@ public class SDDSFile {
      *         <code>false</code> if an error occured
      */
     public boolean writeColumnHeader(int index) {
-        String line;
         if ((index < 0) || (index >= columnCount)) {
             setError("invalid column index (writeColumnHeader)");
             return false;
@@ -6779,8 +6774,7 @@ public class SDDSFile {
      *         <code>false</code> if an error occurs
      */
     public boolean addColumnElement(int column, char v) {
-        Character c = new Character(v);
-        String s = c.toString();
+        String s = String.valueOf(v);
         return addColumnElement(column, s);
     }
 
