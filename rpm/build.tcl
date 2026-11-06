@@ -2,7 +2,7 @@
 # \
 exec tclsh "$0" "$@"
 
-set version 5.3
+set version 6.0
 set name SDDSJava-$version
 puts "Building $name RPM"
 

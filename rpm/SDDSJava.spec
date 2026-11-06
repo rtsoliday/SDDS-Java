@@ -5,9 +5,9 @@ Group:		Development/Languages
 URL:		http://www.aps.anl.gov/asd/oag/oaghome.shtml
 Packager:	Robert Soliday <soliday@aps.anl.gov>
 Autoreq:	0
-Version:	5.3
+Version:	6.0
 Release:	1
-Source:		SDDSJava-5.3.tar.gz
+Source:		SDDSJava-6.0.tar.gz
 
 
 %define debug_package %{nil}
