@@ -36,10 +36,9 @@ public class SDDSParameter {
 	String parameterFormatString;
 	int parameterType;
 	String parameterFixedValue;
-	long[] longValue;
-	double[] doubleValue;
-	String[] stringValue;
-	char[] characterValue;
+	/** One value per page, in a storage array; see SDDSValues. */
+	Object values;
+	SDDSEnumDefinition enumDefinition;
 	int pageCount;
 	final int SDDS_LONGDOUBLE = 1;
 	final int SDDS_DOUBLE = 2;
@@ -52,6 +51,7 @@ public class SDDSParameter {
 	final int SDDS_USHORT = 9;
 	final int SDDS_STRING = 10;
 	final int SDDS_CHARACTER = 11;
+	final int SDDS_ENUM = 12;
 	boolean fixed;
 
 	/**
@@ -86,6 +86,7 @@ public class SDDSParameter {
 	 *                      <li><code>9</code> for ushort</li>
 	 *                      <li><code>10</code> for string</li>
 	 *                      <li><code>11</code> for character</li>
+	 *                      <li><code>12</code> for enum</li>
 	 *                      </ul>
 	 * @param fixed_value   may be <code>null</code>
 	 */
@@ -191,6 +192,8 @@ public class SDDSParameter {
 	 * @param format_string format string of the parameter
 	 */
 	public void setFormat_String(String format_string) {
+		if ((parameterType == SDDS_ENUM) && (SDDSNamelist.blankToNull(format_string) != null))
+			throw new IllegalArgumentException("Enum parameters take no format string");
 		parameterFormatString = format_string;
 	}
 
@@ -203,7 +206,7 @@ public class SDDSParameter {
 		return parameterType;
 	}
 
-	/**
+		/**
 	 * Returns the fixed value of the parameter
 	 *
 	 * @return The <code>String</code> value of the parameter fixed value.
@@ -213,13 +216,26 @@ public class SDDSParameter {
 	}
 
 	/**
-	 * Set the fixed value of the parameter
+	 * Set the fixed value of the parameter. The fixed value of an enum parameter is a
+	 * complete decimal code from its dictionary.
 	 *
 	 * @param fixed_value fixed_value of the parameter
+	 * @throws IllegalArgumentException if this is an enum parameter and the value is
+	 *                                  not a mapped code
 	 */
 	public void setFixed_Value(String fixed_value) {
+		if ((parameterType == SDDS_ENUM) && (fixed_value != null))
+			checkFixedEnum(enumDefinition, fixed_value);
 		parameterFixedValue = fixed_value;
-		fixed = true;
+		fixed = fixed_value != null;
+		if (!fixed && SDDSUtil.isValidType(parameterType))
+			grow(Math.max(pageCount, 1));
+	}
+
+	private static void checkFixedEnum(SDDSEnumDefinition definition, String text) {
+		Integer code = SDDSEnumDefinition.parseCode(text);
+		if ((code == null) || (definition == null) || !definition.hasCode(code.intValue()))
+			throw new IllegalArgumentException("Invalid fixed enum parameter code");
 	}
 
 	/**
@@ -233,8 +249,50 @@ public class SDDSParameter {
 	}
 
 	/**
+	 * Returns the dictionary of an enum parameter
+	 *
+	 * @return the dictionary, or <code>null</code> if this parameter is not an enum
+	 */
+	public SDDSEnumDefinition getEnumDefinition() {
+		return enumDefinition;
+	}
+
+	/**
+	 * Returns the canonical mapping text of an enum parameter
+	 *
+	 * @return the text of the <code>enum_values</code> attribute, or
+	 *         <code>null</code> if this parameter is not an enum
+	 */
+	public String getEnumValues() {
+		return enumDefinition == null ? null : enumDefinition.getValues();
+	}
+
+	/**
+	 * Give a new enum parameter its dictionary. A dictionary cannot be replaced this
+	 * way; use {@link #convert} for that.
+	 *
+	 * @param definition the dictionary
+	 * @throws IllegalArgumentException if this is not a new enum parameter, or if its
+	 *                                  fixed value is not a mapped code
+	 */
+	public void setEnumDefinition(SDDSEnumDefinition definition) {
+		if ((parameterType != SDDS_ENUM) || (enumDefinition != null) || (definition == null))
+			throw new IllegalArgumentException("A dictionary can only be given to a new enum parameter");
+		if (parameterFixedValue != null)
+			checkFixedEnum(definition, parameterFixedValue);
+		enumDefinition = definition;
+	}
+
+	private void grow(int count) {
+		if (values == null)
+			values = SDDSValues.newArray(parameterType, count);
+		else if (Array.getLength(values) < count)
+			values = SDDSValues.copyOf(values, count);
+	}
+
+	/**
 	 * Inserts a blank page at the specified index
-	 * 
+	 *
 	 * @param page index of page to create insert
 	 * @return <code>true</code> on success<br>
 	 *         <code>false</code> on error.
@@ -245,270 +303,94 @@ public class SDDSParameter {
 			return true;
 		} else if ((page < 1) || (page > pageCount + 1)) {
 			return false;
-		} else {
-			if (parameterFixedValue != null) {
-				pageCount++;
-				return true;
-			}
-			int i;
-			switch (parameterType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					longValue = (long[]) SDDSUtil.resize(longValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						longValue[i] = longValue[i - 1];
-					}
-					longValue[page - 1] = 0;
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					doubleValue = (double[]) SDDSUtil.resize(doubleValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						doubleValue[i] = doubleValue[i - 1];
-					}
-					doubleValue[page - 1] = 0;
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					stringValue = (String[]) SDDSUtil.resize(stringValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						stringValue[i] = stringValue[i - 1];
-					}
-					stringValue[page - 1] = "";
-					break;
-				case SDDS_CHARACTER:
-					characterValue = (char[]) SDDSUtil.resize(characterValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						characterValue[i] = characterValue[i - 1];
-					}
-					characterValue[page - 1] = '0';
-					break;
-				default:
-					return false;
-			}
+		}
+		if (parameterFixedValue != null) {
 			pageCount++;
 			return true;
 		}
+		grow(pageCount + 1);
+		System.arraycopy(values, page - 1, values, page, pageCount - page + 1);
+		if (parameterType == SDDS_STRING)
+			((String[]) values)[page - 1] = "";
+		else if (parameterType == SDDS_CHARACTER)
+			((char[]) values)[page - 1] = '0';
+		else if (parameterType == SDDS_LONGDOUBLE)
+			((SDDSLongDouble[]) values)[page - 1] = null;
+		else if (values instanceof long[])
+			((long[]) values)[page - 1] = 0;
+		else
+			((double[]) values)[page - 1] = 0;
+		pageCount++;
+		return true;
 	}
 
 	/**
 	 * Delete a page at the specified index
-	 * 
+	 *
 	 * @param page index of page to delete
 	 * @return <code>true</code> on success<br>
 	 *         <code>false</code> on error.
 	 */
 	public boolean deletePage(int page) {
-		if ((page < 1) || (page > pageCount)) {
+		if ((page < 1) || (page > pageCount))
 			return false;
-		} else {
-			int i;
-			if (parameterFixedValue != null) {
-				pageCount--;
-				return true;
-			}
-			switch (parameterType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					for (i = page; i < pageCount; i++) {
-						longValue[i - 1] = longValue[i];
-					}
-					longValue = (long[]) SDDSUtil.resize(longValue, pageCount - 1);
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					for (i = page; i < pageCount; i++) {
-						doubleValue[i - 1] = doubleValue[i];
-					}
-					doubleValue = (double[]) SDDSUtil.resize(doubleValue, pageCount - 1);
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					for (i = page; i < pageCount; i++) {
-						stringValue[i - 1] = stringValue[i];
-					}
-					stringValue = (String[]) SDDSUtil.resize(stringValue, pageCount - 1);
-					break;
-				case SDDS_CHARACTER:
-					for (i = page; i < pageCount; i++) {
-						characterValue[i - 1] = characterValue[i];
-					}
-					characterValue = (char[]) SDDSUtil.resize(characterValue, pageCount - 1);
-					break;
-				default:
-					return false;
-			}
+		if (parameterFixedValue != null) {
 			pageCount--;
 			return true;
 		}
+		if ((values != null) && (Array.getLength(values) >= pageCount)) {
+			System.arraycopy(values, page, values, page - 1, pageCount - page);
+			values = SDDSValues.copyOf(values, pageCount - 1);
+		}
+		pageCount--;
+		return true;
 	}
 
 	/**
 	 * Create blank pages up to the last page specified
-	 * 
+	 *
 	 * @param lastpage last page to create blank page
 	 */
 	public void makeBlankPages(int lastpage) {
-		int n;
-		n = lastpage - pageCount;
-		if (n > 0) {
-			if (parameterFixedValue != null) {
-				pageCount = lastpage;
-				return;
-			}
-			switch (parameterType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					if (longValue == null)
-						longValue = new long[n];
-					else if (Array.getLength(longValue) < lastpage)
-						longValue = (long[]) SDDSUtil.resize(longValue, lastpage);
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					if (doubleValue == null)
-						doubleValue = new double[n];
-					else if (Array.getLength(doubleValue) < lastpage)
-						doubleValue = (double[]) SDDSUtil.resize(doubleValue, lastpage);
-					break;
-				case SDDS_STRING:
-					if (stringValue == null)
-						stringValue = new String[n];
-					else if (Array.getLength(stringValue) < lastpage)
-						stringValue = (String[]) SDDSUtil.resize(stringValue, lastpage);
-					break;
-				case SDDS_CHARACTER:
-					if (characterValue == null)
-						characterValue = new char[n];
-					else if (Array.getLength(characterValue) < lastpage)
-						characterValue = (char[]) SDDSUtil.resize(characterValue, lastpage);
-					break;
-				default:
-					return;
-			}
+		if ((lastpage > pageCount) && SDDSUtil.isValidType(parameterType)) {
+			if (parameterFixedValue == null)
+				grow(lastpage);
 			pageCount = lastpage;
 		}
 	}
 
 	/**
+	 * Store one value in a page.
+	 *
+	 * @param data values in storage form, the first of which is stored
+	 * @param page the page of the parameter, must be greater then <code>0</code>
+	 */
+	void store(Object data, int page) {
+		if ((page < 1) || !SDDSUtil.isValidType(parameterType))
+			return;
+		if (parameterFixedValue == null) {
+			grow(page);
+			System.arraycopy(data, 0, values, page - 1, 1);
+		}
+		if (page > pageCount)
+			pageCount = page;
+	}
+
+	/**
 	 * Set the value of the parameter at a chosen page
 	 *
-	 * @param value a long precision number
+	 * @param value a long precision number. For a ulong64 parameter this is the raw
+	 *              64 bits. For an enum parameter this is a code.
 	 * @param page  the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if a code is not mapped by an enum parameter
 	 */
 	public void setValue(long value, int page) {
-		int n;
-		Long v = Long.valueOf(value);
-		if (page < 1)
+		if (!SDDSUtil.isValidType(parameterType))
 			return;
-		n = page - pageCount;
-		if (parameterFixedValue != null) {
-			if (n > 0)
-				pageCount = page;
-			return;
-		}
-		switch (parameterType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = value;
-				break;
-			case SDDS_USHORT:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = (int) (value & 0xffff);
-				break;
-			case SDDS_ULONG:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = (long) (value & 0xffffffffL);
-				break;
-			case SDDS_ULONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				if (value < 0)
-					value = 0;
-				longValue[page - 1] = value;
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0) {
-					if (doubleValue == null) {
-						doubleValue = new double[n];
-					} else if (Array.getLength(doubleValue) < page) {
-						doubleValue = (double[]) SDDSUtil.resize(doubleValue, page);
-					}
-				}
-				doubleValue[page - 1] = v.doubleValue();
-				break;
-			case SDDS_STRING:
-				if (n > 0) {
-					if (stringValue == null) {
-						stringValue = new String[n];
-					} else if (Array.getLength(stringValue) < page) {
-						stringValue = (String[]) SDDSUtil.resize(stringValue, page);
-					}
-				}
-				stringValue[page - 1] = v.toString();
-				break;
-			case SDDS_CHARACTER:
-				String temp;
-				if (n > 0) {
-					if (characterValue == null) {
-						characterValue = new char[n];
-					} else if (Array.getLength(characterValue) < page) {
-						characterValue = (char[]) SDDSUtil.resize(characterValue, page);
-					}
-				}
-				temp = v.toString();
-				if (temp.length() > 0) {
-					characterValue[page - 1] = temp.charAt(0);
-				} else {
-					characterValue[page - 1] = '0';
-				}
-				break;
-			default:
-				return;
-		}
-		if (n > 0)
-			pageCount = page;
-		return;
+		if (parameterFixedValue == null)
+			store(SDDSValues.fromLongs(parameterType, new long[] { value }, enumDefinition), page);
+		else
+			store(null, page);
 	}
 
 	/**
@@ -516,263 +398,267 @@ public class SDDSParameter {
 	 *
 	 * @param value a double precision floating-point number
 	 * @param page  the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if this is an enum parameter
 	 */
 	public void setValue(double value, int page) {
-		int n;
-		Double v = Double.valueOf(value);
-		if (page < 1)
+		if (!SDDSUtil.isValidType(parameterType))
 			return;
-		n = page - pageCount;
-		if (parameterFixedValue != null) {
-			if (n > 0)
-				pageCount = page;
-			return;
-		}
-		switch (parameterType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = v.longValue();
-				break;
-			case SDDS_USHORT:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = (int) (v.longValue() & 0xffff);
-				break;
-			case SDDS_ULONG:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = (long) (v.longValue() & 0xffffffffL);
-				break;
-			case SDDS_ULONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				longValue[page - 1] = v.longValue();
-				if (longValue[page - 1] < 0)
-					longValue[page - 1] = 0;
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0) {
-					if (doubleValue == null) {
-						doubleValue = new double[n];
-					} else if (Array.getLength(doubleValue) < page) {
-						doubleValue = (double[]) SDDSUtil.resize(doubleValue, page);
-					}
-				}
-				doubleValue[page - 1] = value;
-				break;
-			case SDDS_STRING:
-				if (n > 0) {
-					if (stringValue == null) {
-						stringValue = new String[n];
-					} else if (Array.getLength(stringValue) < page) {
-						stringValue = (String[]) SDDSUtil.resize(stringValue, page);
-					}
-				}
-				stringValue[page - 1] = v.toString();
-				break;
-			case SDDS_CHARACTER:
-				String temp;
-				if (n > 0) {
-					if (characterValue == null) {
-						characterValue = new char[n];
-					} else if (Array.getLength(characterValue) < page) {
-						characterValue = (char[]) SDDSUtil.resize(characterValue, page);
-					}
-				}
-				temp = v.toString();
-				if (temp.length() > 0) {
-					characterValue[page - 1] = temp.charAt(0);
-				} else {
-					characterValue[page - 1] = '0';
-				}
-				break;
-			default:
-				return;
-		}
-		if (n > 0)
-			pageCount = page;
-		return;
+		if (parameterFixedValue == null)
+			store(SDDSValues.fromDoubles(parameterType, new double[] { value }), page);
+		else
+			store(null, page);
 	}
 
 	/**
 	 * Set the value of the parameter at a chosen page
 	 *
-	 * @param value a string value
+	 * @param value a string value. For an enum parameter this is a decimal code.
 	 * @param page  the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if the value is not a code mapped by an enum
+	 *                                  parameter
 	 */
 	public void setValue(String value, int page) {
-		int n;
-		if (page < 1)
+		if (!SDDSUtil.isValidType(parameterType))
 			return;
-		n = page - pageCount;
-		if (parameterFixedValue != null) {
-			if (n > 0)
-				pageCount = page;
-			return;
-		}
-		switch (parameterType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				try {
-					longValue[page - 1] = (Long.valueOf(value)).longValue();
-				} catch (Exception e) {
-					longValue[page - 1] = (long) 0;
-				}
-				break;
-			case SDDS_USHORT:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				try {
-					longValue[page - 1] = (int) ((Long.valueOf(value)).longValue() & 0xffff);
-				} catch (Exception e) {
-					longValue[page - 1] = (long) 0;
-				}
-				break;
-			case SDDS_ULONG:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				try {
-					longValue[page - 1] = (long) ((Long.valueOf(value)).longValue() & 0xffffffffL);
-				} catch (Exception e) {
-					longValue[page - 1] = (long) 0;
-				}
-				break;
-			case SDDS_ULONG64:
-				if (n > 0) {
-					if (longValue == null) {
-						longValue = new long[n];
-					} else if (Array.getLength(longValue) < page) {
-						longValue = (long[]) SDDSUtil.resize(longValue, page);
-					}
-				}
-				try {
-					longValue[page - 1] = (Long.valueOf(value)).longValue();
-					if (longValue[page - 1] < 0)
-						longValue[page - 1] = 0;
-				} catch (Exception e) {
-					longValue[page - 1] = (long) 0;
-				}
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0) {
-					if (doubleValue == null) {
-						doubleValue = new double[n];
-					} else if (Array.getLength(doubleValue) < page) {
-						doubleValue = (double[]) SDDSUtil.resize(doubleValue, page);
-					}
-				}
-				try {
-					doubleValue[page - 1] = (Double.valueOf(value)).doubleValue();
-				} catch (Exception e) {
-					doubleValue[page - 1] = (double) 0;
-				}
-				break;
-			case SDDS_STRING:
-				if (n > 0) {
-					if (stringValue == null) {
-						stringValue = new String[n];
-					} else if (Array.getLength(stringValue) < page) {
-						stringValue = (String[]) SDDSUtil.resize(stringValue, page);
-					}
-				}
-				stringValue[page - 1] = value;
-				break;
-			case SDDS_CHARACTER:
-				if (n > 0) {
-					if (characterValue == null) {
-						characterValue = new char[n];
-					} else if (Array.getLength(characterValue) < page) {
-						characterValue = (char[]) SDDSUtil.resize(characterValue, page);
-					}
-				}
-				if (value.length() > 0) {
-					characterValue[page - 1] = value.charAt(0);
-				} else {
-					characterValue[page - 1] = '0';
-				}
-				break;
-			default:
-				return;
-		}
-		if (n > 0)
-			pageCount = page;
-		return;
+		if (parameterFixedValue == null)
+			store(SDDSValues.fromStrings(parameterType, new String[] { value }, enumDefinition), page);
+		else
+			store(null, page);
 	}
 
 	/**
-	 * Write the header to a file.
-	 * 
+	 * Set the value of a longdouble parameter at a chosen page, without any loss of
+	 * precision
+	 *
+	 * @param value a long double
+	 * @param page  the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if this is not a longdouble parameter
+	 */
+	public void setValue(SDDSLongDouble value, int page) {
+		if (parameterType != SDDS_LONGDOUBLE)
+			throw new IllegalArgumentException("Parameter " + parameterName + " is not a longdouble parameter");
+		store(new SDDSLongDouble[] { value }, page);
+	}
+
+	/**
+	 * Set the label of an enum parameter at a chosen page
+	 *
+	 * @param label a label from the dictionary
+	 * @param page  the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if the label is not in the dictionary
+	 */
+	public void setLabel(String label, int page) {
+		if (enumDefinition == null)
+			throw new IllegalArgumentException("Parameter " + parameterName + " is not an enum parameter");
+		store(SDDSValues.convert(SDDS_STRING, null, SDDS_ENUM, enumDefinition, new String[] { label }, 1), page);
+	}
+
+	/**
+	 * Set an enum value that may not have been chosen yet, as an interactive program
+	 * needs to. A chosen code is checked. A <code>null</code> is stored as code 0, with
+	 * no dictionary check, so the file cannot be written until it has a mapped code.
+	 *
+	 * @param code the code, or <code>null</code> for a value not chosen yet
+	 * @param page the page of the parameter, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if the code is not mapped
+	 */
+	public void setEnumCell(Integer code, int page) {
+		if (enumDefinition == null)
+			throw new IllegalArgumentException("Parameter " + parameterName + " is not an enum parameter");
+		store(SDDSValues.enumCells(enumDefinition, new Integer[] { code }), page);
+	}
+
+	/**
+	 * Returns the code of an enum parameter on a chosen page
+	 *
+	 * @param page the page of the parameter, must be greater then <code>0</code>
+	 * @return the code, or <code>null</code> if this is not an enum parameter or the
+	 *         page does not exist
+	 */
+	public Integer getEnumCode(int page) {
+		if (parameterType != SDDS_ENUM)
+			return null;
+		if (parameterFixedValue != null)
+			return SDDSEnumDefinition.parseCode(parameterFixedValue);
+		if ((page < 1) || (page > pageCount) || (values == null))
+			return null;
+		return Integer.valueOf((int) ((long[]) values)[page - 1]);
+	}
+
+	/**
+	 * Returns the label of an enum parameter on a chosen page
+	 *
+	 * @param page the page of the parameter, must be greater then <code>0</code>
+	 * @return the label, or <code>null</code> if there is no mapped value
+	 */
+	public String getEnumLabel(int page) {
+		Integer code = getEnumCode(page);
+		return code == null ? null : enumDefinition.codeToLabel(code.intValue());
+	}
+
+	/**
+	 * Check that an enum parameter can be written for a page
+	 *
+	 * @param page the page of the parameter
+	 * @return <code>true</code> if this is not an enum parameter or the value is
+	 *         mapped
+	 */
+	boolean isValidEnumPage(int page) {
+		if (parameterType != SDDS_ENUM)
+			return true;
+		if (enumDefinition == null)
+			return false;
+		if ((page > pageCount) && (parameterFixedValue == null))
+			return true;
+		return getEnumLabel(page) != null;
+	}
+
+	/**
+	 * Convert this parameter in place between enum, long and string. Every value is
+	 * checked before any is changed.
+	 *
+	 * @param targetType <code>SDDS_ENUM</code>, <code>SDDS_LONG</code> or
+	 *                   <code>SDDS_STRING</code>
+	 * @param target     dictionary for an enum target, otherwise <code>null</code>
+	 * @throws IllegalArgumentException if the conversion is not allowed or a value
+	 *                                  cannot be converted
+	 */
+	public void convert(int targetType, SDDSEnumDefinition target) {
+		if (!SDDSValues.isConversion(parameterType, targetType) || ((targetType == SDDS_ENUM) && (target == null)))
+			throw new IllegalArgumentException("Invalid enum conversion for parameter " + parameterName);
+		String newFixed = null;
+		Object converted = null;
+		if (parameterFixedValue != null) {
+			newFixed = convertFixed(targetType, target);
+		} else if (values != null) {
+			converted = SDDSValues.convert(parameterType, enumDefinition, targetType, target, values, pageCount);
+		}
+		values = converted;
+		parameterFixedValue = newFixed;
+		parameterType = targetType;
+		enumDefinition = target;
+		parameterFormatString = null;
+	}
+
+	/** Returns the fixed value in the form the target type needs. */
+	private String convertFixed(int targetType, SDDSEnumDefinition target) {
+		String label = null;
+		int code = 0;
+		if (parameterType == SDDS_ENUM) {
+			Integer parsed = SDDSEnumDefinition.parseCode(parameterFixedValue);
+			label = parsed == null ? null : enumDefinition.codeToLabel(parsed.intValue());
+			if (label == null)
+				throw new IllegalArgumentException("Invalid fixed enum parameter code");
+			code = parsed.intValue();
+		} else if (parameterType == SDDS_STRING) {
+			label = (String) getValue(1, false);
+		} else {
+			Integer parsed = SDDSEnumDefinition.parseCode(parameterFixedValue);
+			if (parsed == null)
+				throw new IllegalArgumentException("Invalid fixed enum parameter code");
+			code = parsed.intValue();
+		}
+		if (targetType == SDDS_ENUM) {
+			if (parameterType != SDDS_LONG) {
+				Integer mapped = target.labelToCode(label);
+				if (mapped == null)
+					throw new IllegalArgumentException("Enum conversion requires every label in the target mapping");
+				code = mapped.intValue();
+			} else if (!target.hasCode(code)) {
+				throw new IllegalArgumentException("Invalid fixed enum parameter code");
+			}
+			return Integer.toString(code);
+		}
+		if (targetType == SDDS_LONG)
+			return Integer.toString(code);
+		String escaped = escapeLegacyFixedString(label);
+		/* The legacy reader accepts a definition line of up to 1024 bytes including its newline. */
+		if (legacyHeader(escaped, "string").length() > 1024)
+			throw new IllegalArgumentException(
+					"Fixed enum label is too long for a string fixed value in an SDDS1-5 header; make the parameter page data first");
+		return escaped;
+	}
+
+	/**
+	 * Escape a label as a legacy string fixed value. Only bytes that the legacy header
+	 * reader would alter are written as octal escapes.
+	 */
+	private static String escapeLegacyFixedString(String label) {
+		String raw = SDDSText.toRaw(label);
+		int first = 0, last = raw.length();
+		while ((first < last) && (raw.charAt(first) == ' '))
+			first++;
+		while ((last > first) && (raw.charAt(last - 1) == ' '))
+			last--;
+		StringBuilder out = new StringBuilder(raw.length() + 8);
+		for (int i = 0; i < raw.length(); i++) {
+			char c = raw.charAt(i);
+			if ((c < 0x20) || (c == 0x7f) || (c == '\\') || (c == '"') || (c == '!') || (c == '&')
+					|| ((c == ' ') && ((i < first) || (i >= last)))) {
+				String octal = Integer.toOctalString(c);
+				out.append('\\').append("000", 0, 3 - octal.length()).append(octal);
+			} else {
+				out.append(c);
+			}
+		}
+		return SDDSText.fromRaw(out.toString());
+	}
+
+	/**
+	 * Copy the values of another parameter of the same type
+	 *
+	 * @param source parameter to copy from
+	 */
+	void copyValues(SDDSParameter source) {
+		pageCount = source.pageCount;
+		values = source.values == null ? null : SDDSValues.copyOf(source.values, Array.getLength(source.values));
+	}
+
+	/**
+	 * Write the header to a file using the format of SDDS protocol 1 to 5.
+	 *
 	 * @param dos a valid DataOutputStream
 	 * @return <code>true</code> if the header was successfully written<br>
 	 *         <code>false</code> if an error occured
 	 */
 	public boolean writeHeader(DataOutputStream dos) {
-		String line;
+		return writeHeader(dos, parameterType == SDDS_ENUM ? 6 : 5);
+	}
+
+	private String legacyHeader(String fixedValue, String typeName) {
+		return "&parameter " + SDDSNamelist.legacyField("name", parameterName)
+				+ SDDSNamelist.legacyField("symbol", SDDSNamelist.blankToNull(parameterSymbol))
+				+ SDDSNamelist.legacyField("units", SDDSNamelist.blankToNull(parameterUnits))
+				+ SDDSNamelist.legacyField("description", SDDSNamelist.blankToNull(parameterDescription))
+				+ SDDSNamelist.legacyField("format_string", SDDSNamelist.blankToNull(parameterFormatString))
+				+ SDDSNamelist.legacyField("type", typeName)
+				+ SDDSNamelist.legacyField("fixed_value", fixedValue) + "&end\n";
+	}
+
+	/**
+	 * Write the header to a file.
+	 *
+	 * @param dos     a valid DataOutputStream
+	 * @param version protocol version of the file being written
+	 * @return <code>true</code> if the header was successfully written<br>
+	 *         <code>false</code> if an error occured
+	 */
+	public boolean writeHeader(DataOutputStream dos, int version) {
 		if (parameterName == null)
 			return false;
-		line = "&parameter name=" + parameterName + ", ";
-		if (parameterSymbol != null) {
-			line = line.concat("symbol=" + SDDSUtil.prepareString(parameterSymbol) + ", ");
-		}
-		if (parameterUnits != null) {
-			line = line.concat("units=" + SDDSUtil.prepareString(parameterUnits) + ", ");
-		}
-		if (parameterDescription != null) {
-			line = line.concat("description=" + SDDSUtil.prepareString(parameterDescription) + ", ");
-		}
-		if (parameterFormatString != null) {
-			line = line.concat("format_string=" + SDDSUtil.prepareString(parameterFormatString) + ", ");
-		}
-		line = line.concat("type=" + SDDSUtil.getTypeName(parameterType) + ", ");
-		if (parameterFixedValue != null) {
-			line = line.concat("fixed_value=" + SDDSUtil.prepareString(parameterFixedValue) + ", ");
-		}
-		line = line.concat("&end\n");
 		try {
-			dos.writeBytes(line);
+			if (version == 6) {
+				String line = "&parameter " + SDDSNamelist.field6("name", parameterName)
+						+ SDDSNamelist.field6("symbol", parameterSymbol) + SDDSNamelist.field6("units", parameterUnits)
+						+ SDDSNamelist.field6("description", parameterDescription)
+						+ SDDSNamelist.field6("format_string", SDDSNamelist.blankToNull(parameterFormatString))
+						+ "type=" + SDDSUtil.getTypeName(parameterType) + ", "
+						+ SDDSNamelist.field6("fixed_value", parameterFixedValue)
+						+ SDDSNamelist.field6("enum_values", getEnumValues()) + " &end\n";
+				dos.write(SDDSNamelist.finish6(line));
+			} else {
+				dos.writeBytes(legacyHeader(parameterFixedValue, SDDSUtil.getTypeName(parameterType)));
+			}
 		} catch (Exception e) {
 			return false;
 		}
@@ -793,109 +679,14 @@ public class SDDSParameter {
 	public boolean writeValue(DataOutputStream dos, int page, boolean ascii) {
 		if (parameterFixedValue != null)
 			return true;
-		if ((pageCount == 0) || (page < 1) || (page > pageCount))
+		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (values == null))
 			return false;
 		try {
-			if (ascii) {
-				switch (parameterType) {
-					case SDDS_SHORT:
-						dos.writeBytes(Short.toString((short) longValue[page - 1]));
-						break;
-					case SDDS_USHORT:
-						dos.writeBytes(Integer.toString((int) (longValue[page - 1] & 0xffff)));
-						break;
-					case SDDS_LONG:
-						dos.writeBytes(Integer.toString((int) longValue[page - 1]));
-						break;
-					case SDDS_ULONG:
-						dos.writeBytes(Long.toString((long) (longValue[page - 1] & 0xffffffffL)));
-						break;
-					case SDDS_LONG64:
-						dos.writeBytes(Long.toString(longValue[page - 1]));
-						break;
-					case SDDS_ULONG64:
-						if (longValue[page - 1] < 0)
-							longValue[page - 1] = 0;
-						dos.writeBytes(Long.toString(longValue[page - 1]));
-						break;
-					case SDDS_FLOAT:
-						dos.writeBytes(Float.toString((float) doubleValue[page - 1]));
-						break;
-					case SDDS_DOUBLE:
-						dos.writeBytes(Double.toString(doubleValue[page - 1]));
-						break;
-					case SDDS_LONGDOUBLE:
-						return false;
-					case SDDS_STRING:
-						if (stringValue[page - 1] == null)
-							stringValue[page - 1] = "";
-						dos.writeBytes(SDDSUtil.prepareString(stringValue[page - 1]));
-						break;
-					case SDDS_CHARACTER:
-						String temp;
-						if (Character.isLetterOrDigit(characterValue[page - 1])) {
-							dos.writeByte(characterValue[page - 1]);
-						} else {
-							temp = Integer.toOctalString(characterValue[page - 1]);
-							while (temp.length() < 3) {
-								temp = "0" + temp;
-							}
-							dos.writeBytes("\\" + temp);
-						}
-						break;
-					default:
-						return false;
-				}
-				dos.writeBytes("\n");
-			} else {
-				switch (parameterType) {
-					case SDDS_SHORT:
-						dos.writeShort((short) longValue[page - 1]);
-						break;
-					case SDDS_USHORT:
-						dos.writeShort((short) (longValue[page - 1] & 0xffff));
-						break;
-					case SDDS_LONG:
-						dos.writeInt((int) longValue[page - 1]);
-						break;
-					case SDDS_ULONG:
-						dos.writeInt((int) (longValue[page - 1] & 0xffffffffL));
-						break;
-					case SDDS_LONG64:
-						dos.writeLong(longValue[page - 1]);
-						break;
-					case SDDS_ULONG64:
-						if (longValue[page - 1] < 0)
-							longValue[page - 1] = 0;
-						dos.writeLong(longValue[page - 1]);
-						break;
-					case SDDS_FLOAT:
-						dos.writeFloat((float) doubleValue[page - 1]);
-						break;
-					case SDDS_DOUBLE:
-						dos.writeDouble(doubleValue[page - 1]);
-						break;
-					case SDDS_LONGDOUBLE:
-						return false;
-					case SDDS_STRING:
-						if (stringValue[page - 1] == null) {
-							dos.writeInt(0);
-						} else {
-							dos.writeInt(stringValue[page - 1].length());
-							dos.writeBytes(stringValue[page - 1]);
-						}
-						break;
-					case SDDS_CHARACTER: /*
-											 * note that to be compatable with existing software we must use writeByte
-											 * instead of writeChar
-											 */
-						dos.writeByte((int) characterValue[page - 1]);
-						break;
-					default:
-						return false;
-				}
-			}
-		} catch (IOException e) {
+			if (ascii)
+				dos.writeBytes(SDDSValues.asciiText(parameterType, values, page - 1) + "\n");
+			else
+				SDDSValues.writeBinary(dos, parameterType, values, page - 1, true);
+		} catch (Exception e) {
 			return false;
 		}
 		return true;
@@ -913,63 +704,57 @@ public class SDDSParameter {
 	public boolean writeValue(LEDataOutputStream ledos, int page) {
 		if (parameterFixedValue != null)
 			return true;
-		if ((pageCount == 0) || (page < 1) || (page > pageCount))
+		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (values == null))
 			return false;
 		try {
-			switch (parameterType) {
-				case SDDS_SHORT:
-					ledos.writeShort((short) longValue[page - 1]);
-					break;
-				case SDDS_USHORT:
-					ledos.writeShort((short) (longValue[page - 1] & 0xffff));
-					break;
-				case SDDS_LONG:
-					ledos.writeInt((int) longValue[page - 1]);
-					break;
-				case SDDS_ULONG:
-					ledos.writeInt((int) (longValue[page - 1] & 0xffffffffL));
-					break;
-				case SDDS_LONG64:
-					ledos.writeLong(longValue[page - 1]);
-					break;
-				case SDDS_ULONG64:
-					if (longValue[page - 1] < 0)
-						longValue[page - 1] = 0;
-					ledos.writeLong(longValue[page - 1]);
-					break;
-				case SDDS_FLOAT:
-					ledos.writeFloat((float) doubleValue[page - 1]);
-					break;
-				case SDDS_DOUBLE:
-					ledos.writeDouble(doubleValue[page - 1]);
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					if (stringValue[page - 1] == null) {
-						ledos.writeInt(0);
-					} else {
-						ledos.writeInt(stringValue[page - 1].length());
-						ledos.writeBytes(stringValue[page - 1]);
-					}
-					break;
-				case SDDS_CHARACTER: /*
-										 * note that to be compatable with existing software we must use writeByte
-										 * instead of writeChar
-										 */
-					ledos.writeByte((int) characterValue[page - 1]);
-					break;
-				default:
-					return false;
-			}
-		} catch (IOException e) {
+			SDDSValues.writeBinary(ledos, parameterType, values, page - 1, false);
+		} catch (Exception e) {
 			return false;
 		}
 		return true;
 	}
 
 	/**
-	 * Get the values of the parameter for a chosen page
+	 * Read the fixed value as the C library does, which interprets escapes in strings.
+	 *
+	 * @return storage holding the value, or <code>null</code> if the text is invalid
+	 */
+	private Object scanFixedValue() {
+		Object data = SDDSValues.newArray(parameterType, 1);
+		String raw = SDDSText.toRaw(parameterFixedValue);
+		try {
+			if (parameterType == SDDS_STRING) {
+				String text = raw;
+				if ((text.length() > 0) && (text.charAt(text.length() - 1) == '\r'))
+					text = text.substring(0, text.length() - 1);
+				if ((text.length() > 0) && (text.charAt(0) == '"'))
+					text = SDDSText.nextToken(text, new int[] { 0 });
+				((String[]) data)[0] = SDDSText.fromRaw(SDDSText.endAtNul(SDDSText.interpretEscapes(text)));
+			} else {
+				String token = SDDSText.nextToken(raw, new int[] { 0 });
+				if (token == null)
+					return null;
+				SDDSValues.scan(parameterType, parameterType == SDDS_ENUM ? raw : token, data, 0, enumDefinition);
+			}
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
+		return data;
+	}
+
+	/**
+	 * Check that a fixed value can be read as a value of this parameter's type
+	 *
+	 * @return <code>true</code> if it can, or if there is no fixed value
+	 */
+	boolean isValidFixedValue() {
+		return (parameterFixedValue == null) || (scanFixedValue() != null);
+	}
+
+	/**
+	 * Get the values of the parameter for a chosen page. An enum parameter gives an
+	 * {@link SDDSEnumValue} and a ulong64 parameter gives a <code>Long</code>, or a
+	 * <code>BigInteger</code> for a value too large for a <code>Long</code>.
 	 *
 	 * @param page          the page of the parameter, must be greater then
 	 *                      <code>0</code>
@@ -979,79 +764,12 @@ public class SDDSParameter {
 	 * @return Object containing parameter data
 	 */
 	public Object getValue(int page, boolean string_quotes) {
-		if ((pageCount == 0) || (page < 1) || (page > pageCount))
-			if (parameterFixedValue == null)
-				return null;
-		page--;
-		try {
-			switch (parameterType) {
-				case SDDS_SHORT:
-					if (parameterFixedValue != null)
-						return Short.valueOf(parameterFixedValue);
-					return Short.valueOf((short) longValue[page]);
-				case SDDS_USHORT:
-					if (parameterFixedValue != null)
-						return Integer.valueOf(parameterFixedValue);
-					return Integer.valueOf((int) (longValue[page] & 0xffff));
-				case SDDS_LONG:
-				case SDDS_LONG64:
-					if (parameterFixedValue != null)
-						return Long.valueOf(parameterFixedValue);
-					return Long.valueOf(longValue[page]);
-				case SDDS_ULONG:
-					if (parameterFixedValue != null)
-						return Long.valueOf(parameterFixedValue);
-					return Long.valueOf((long) (longValue[page] & 0xffffffffL));
-				case SDDS_ULONG64:
-					if (parameterFixedValue != null)
-						return Long.valueOf(parameterFixedValue);
-					if (longValue[page] < 0)
-						longValue[page] = 0;
-					return Long.valueOf(longValue[page]);
-				case SDDS_FLOAT:
-					if (parameterFixedValue != null)
-						return Float.valueOf(parameterFixedValue);
-					return Float.valueOf((float) doubleValue[page]);
-				case SDDS_DOUBLE:
-					if (parameterFixedValue != null)
-						return Double.valueOf(parameterFixedValue);
-					return Double.valueOf(doubleValue[page]);
-				case SDDS_STRING:
-					if (parameterFixedValue != null) {
-						if (string_quotes) {
-							return SDDSUtil.prepareString(parameterFixedValue);
-						} else {
-							return parameterFixedValue;
-						}
-					}
-					if (stringValue[page] == null)
-						stringValue[page] = "";
-					if (string_quotes) {
-						return SDDSUtil.prepareString(stringValue[page]);
-					} else {
-						return stringValue[page];
-					}
-				case SDDS_CHARACTER:
-					if (parameterFixedValue != null) {
-						if (parameterFixedValue.length() > 0) {
-							return Character.toString(parameterFixedValue.charAt(0));
-						} else {
-							return "0";
-						}
-					}
-					if (Character.isLetterOrDigit(characterValue[page])) {
-						return Character.toString(characterValue[page]);
-					} else {
-						String temp = Integer.toOctalString(characterValue[page]);
-						while (temp.length() < 3)
-							temp = "0" + temp;
-						return ("\\" + temp);
-					}
-				default:
-					return null;
-			}
-		} catch (Exception e) {
-			return null;
+		if (parameterFixedValue != null) {
+			Object data = scanFixedValue();
+			return data == null ? null : SDDSValues.box(parameterType, data, 0, enumDefinition, string_quotes);
 		}
+		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (values == null))
+			return null;
+		return SDDSValues.box(parameterType, values, page - 1, enumDefinition, string_quotes);
 	}
 }

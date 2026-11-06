@@ -384,6 +384,11 @@ public class sddsEdit extends JFrame implements Printable {
 		asciiBinaryButtons[0].setSelected(true);
 
 		parameterTable = new JTable(new DefaultTableModel()) {
+			public TableCellEditor getCellEditor(int row, int column) {
+				SDDSEnumDefinition definition = parameterEnumDefinition(row);
+				return definition == null ? super.getCellEditor(row, column) : enumEditor(definition);
+			}
+
 			protected void configureEnclosingScrollPane() {
 				Container p = getParent();
 				if (p instanceof JViewport) {
@@ -544,6 +549,116 @@ public class sddsEdit extends JFrame implements Printable {
 		textArea.setCaretPosition(textArea.getDocument().getLength());
 	}
 
+	/** Returns the dictionary of the parameter on a row of the parameter table. */
+	static SDDSEnumDefinition parameterEnumDefinition(int row) {
+		if ((row < 0) || (row >= parameter_dlm.getSize()))
+			return null;
+		return sdds.getParameterEnumDefinition(sdds.getParameterIndex((String) parameter_dlm.getElementAt(row)));
+	}
+
+	/** Returns a cell editor that only offers the states of a dictionary. */
+	static TableCellEditor enumEditor(SDDSEnumDefinition definition) {
+		DefaultCellEditor editor = new DefaultCellEditor(new JComboBox(new EnumCells(definition).getChoices()));
+		editor.setClickCountToStart(1);
+		return editor;
+	}
+
+	/** Give a table column the cell editor its type needs. */
+	static void installEditor(TableColumn column, SDDSEnumDefinition definition) {
+		if (definition != null) {
+			column.setCellEditor(enumEditor(definition));
+		} else if (column.getCellEditor() == null) {
+			DefaultCellEditor editor = new DefaultCellEditor(new JTextField());
+			editor.setClickCountToStart(1);
+			column.setCellEditor(editor);
+		}
+	}
+
+	/**
+	 * Report any errors left by a library call that has no return value.
+	 *
+	 * @return <code>true</code> if there were errors
+	 */
+	static boolean reportErrors() {
+		String errors = sdds.getErrors();
+		if (errors.length() > 0)
+			appendStatus("Error: " + errors);
+		return errors.length() > 0;
+	}
+
+	/**
+	 * Replace a dictionary through a checked conversion, which maps values by label.
+	 * The table is reloaded so that it shows the new codes.
+	 *
+	 * @param kind    0 for a column, 1 for a parameter, 2 for an array
+	 * @param index   index of the element
+	 * @param mapping the new mapping
+	 * @return <code>false</code> if the mapping could not be changed
+	 */
+	boolean changeEnumMapping(int kind, int index, String mapping) {
+		String current = kind == 0 ? sdds.getColumnEnumValues(index)
+				: kind == 1 ? sdds.getParameterEnumValues(index) : sdds.getArrayEnumValues(index);
+		if ((current == null) || current.equals(mapping))
+			return true;
+		if (!savePage())
+			return false;
+		boolean converted = kind == 0 ? sdds.convertColumn(index, SDDSUtil.SDDS_ENUM, mapping)
+				: kind == 1 ? sdds.convertParameter(index, SDDSUtil.SDDS_ENUM, mapping)
+						: sdds.convertArray(index, SDDSUtil.SDDS_ENUM, mapping);
+		if (!converted) {
+			appendStatus("Error: " + sdds.getErrors());
+			return false;
+		}
+		int page = currentPage + 1;
+		clearPage();
+		loadPage(page);
+		appendStatus("enum mapping replaced");
+		return true;
+	}
+
+	/** Returns the text a search compares for a cell, which for an enum is its label. */
+	static String searchText(int row, int column) {
+		Object cell = column_dtm.getValueAt(row, column);
+		SDDSEnumDefinition definition = sdds.getColumnEnumDefinition(sdds.getColumnIndex(column_dtm.getColumnName(column)));
+		if (definition != null)
+			return new EnumCells(definition).label(cell);
+		return cell.toString();
+	}
+
+	/** Returns the cell for a new row of a table column. */
+	static Object newColumnCell(int column) {
+		SDDSEnumDefinition definition = sdds.getColumnEnumDefinition(sdds.getColumnIndex(column_dtm.getColumnName(column)));
+		return definition == null ? "" : new EnumCells(definition).defaultCell();
+	}
+
+	/**
+	 * Returns the cell for a new row of an array table column. An enum array only gets
+	 * a state if the new row extends it, since rows past its end are not elements.
+	 */
+	static Object newArrayCell(int column, int row) {
+		SDDSEnumDefinition definition = sdds.getArrayEnumDefinition(sdds.getArrayIndex(array_dtm.getColumnName(column)));
+		if (definition == null)
+			return "";
+		int used = 0;
+		for (int i = 0; i < array_dtm.getRowCount(); i++) {
+			if (!EnumCells.isBlank(array_dtm.getValueAt(i, column)))
+				used = i + 1;
+		}
+		return row <= used ? new EnumCells(definition).defaultCell() : "";
+	}
+
+	/**
+	 * Returns the codes of an enum table column, with <code>null</code> for a cell
+	 * that does not hold a state.
+	 */
+	static Integer[] enumCodes(SDDSEnumDefinition definition, String[] cells, int count) {
+		EnumCells enumCells = new EnumCells(definition);
+		Integer[] codes = new Integer[count];
+		for (int i = 0; i < count; i++)
+			codes[i] = enumCells.code(cells[i]);
+		return codes;
+	}
+
 	public static void main(String[] args) {
 		String[][] commandLineArgs;
 		String initFile = null;
@@ -628,7 +743,7 @@ public class sddsEdit extends JFrame implements Printable {
 			parameterValues = new Object[numberOfParameters][1];
 			parameter_dlm.clear();
 			for (i = 0; i < numberOfParameters; i++) {
-				parameterValues[i][0] = sdds.getParameterValue(i, page, false);
+				parameterValues[i][0] = EnumCells.cell(sdds.getParameterValue(i, page, false));
 				parameter_dlm.addElement(parameterNames[i]);
 			}
 
@@ -657,7 +772,10 @@ public class sddsEdit extends JFrame implements Printable {
 			for (i = 0; i < rows; i++) {
 				column_dlm.addElement(Integer.valueOf(i + 1));
 				for (j = 0; j < numberOfColumns; j++) {
-					columnMajorOrderValues[i][j] = columnValues[j][i];
+					if ((columnValues[j] != null) && (i < columnValues[j].length))
+						columnMajorOrderValues[i][j] = EnumCells.cell(columnValues[j][i]);
+					else
+						columnMajorOrderValues[i][j] = "";
 				}
 			}
 			column_dtm.setDataVector(columnMajorOrderValues, columnNames);
@@ -673,11 +791,7 @@ public class sddsEdit extends JFrame implements Printable {
 					tc.setWidth((columnNames[i].length() + 1) * 10);
 				}
 				tc.setHeaderRenderer(renderer);
-				if ((DefaultCellEditor) (column_dtcm.getColumn(i).getCellEditor()) == null) {
-					dce = new DefaultCellEditor(new JTextField());
-					dce.setClickCountToStart(1);
-					column_dtcm.getColumn(i).setCellEditor((TableCellEditor) dce);
-				}
+				installEditor(tc, sdds.getColumnEnumDefinition(i));
 			}
 			JTableHeader header = columnTable.getTableHeader();
 			header.addMouseListener(new HeaderListener(header, renderer));
@@ -697,9 +811,9 @@ public class sddsEdit extends JFrame implements Printable {
 			for (i = 0; i < numberOfArrays; i++) {
 				dimensions = sdds.getArrayDimensions(i);
 				dim = sdds.getArrayDim(page, i);
-				elements[i] = 0;
-				for (j = 0; j < dimensions; j++) {
-					elements[i] = elements[i] + dim[j];
+				elements[i] = (dim == null) ? 0 : 1;
+				for (j = 0; (dim != null) && (j < dimensions); j++) {
+					elements[i] = elements[i] * dim[j];
 				}
 				if (elements[i] > maxElements) {
 					maxElements = elements[i];
@@ -715,7 +829,7 @@ public class sddsEdit extends JFrame implements Printable {
 				array_dlm.addElement(Integer.valueOf(i + 1));
 				for (j = 0; j < numberOfArrays; j++) {
 					if (i < elements[j]) {
-						arrayMajorOrderValues[i][j] = arrayValues[j][i];
+						arrayMajorOrderValues[i][j] = EnumCells.cell(arrayValues[j][i]);
 					}
 				}
 			}
@@ -733,11 +847,7 @@ public class sddsEdit extends JFrame implements Printable {
 					tc.setWidth((arrayNames[i].length() + 1) * 10);
 				}
 				tc.setHeaderRenderer(renderer);
-				if ((DefaultCellEditor) (array_dtcm.getColumn(i).getCellEditor()) == null) {
-					dce = new DefaultCellEditor(new JTextField());
-					dce.setClickCountToStart(1);
-					array_dtcm.getColumn(i).setCellEditor((TableCellEditor) dce);
-				}
+				installEditor(tc, sdds.getArrayEnumDefinition(i));
 			}
 			JTableHeader header = arrayTable.getTableHeader();
 			header.addMouseListener(new ArrayHeaderListener(header, renderer));
@@ -860,12 +970,21 @@ public class sddsEdit extends JFrame implements Printable {
 				} catch (Exception e) {
 					parameterValues[i] = "";
 				}
-				types[i] = sdds.getParameterType(i);
+				if (i < numberOfParameters)
+					types[i] = sdds.getParameterType(i);
 			}
 			for (i = 0; i < numberOfParameters; i++) {
 				for (j = 0; j < pars; j++) {
 					if (parameterNames[i].equals((String) parameter_dlm.getElementAt(j))) {
-						if (types[i] == SDDSUtil.SDDS_CHARACTER) {
+						if (types[i] == SDDSUtil.SDDS_ENUM) {
+							if ((sdds.getParameterFixedValue(i) == null)
+									&& !sdds.setParameterEnumCell(i,
+											new EnumCells(sdds.getParameterEnumDefinition(i)).code(parameterValues[j]),
+											currentPage + 1)) {
+								appendStatus("Error: " + sdds.getErrors());
+								return false;
+							}
+						} else if (types[i] == SDDSUtil.SDDS_CHARACTER) {
 							if (!sdds.setParameter(i, SDDSUtil.returnCharValueFromOctalCode(parameterValues[j]),
 									currentPage + 1)) {
 								appendStatus("Error: " + sdds.getErrors());
@@ -891,13 +1010,20 @@ public class sddsEdit extends JFrame implements Printable {
 
 			for (j = 0; j < rows; j++) {
 				for (i = 0; i < cols; i++) {
-					columnValues[i][j] = column_dtm.getValueAt(j, i).toString();
+					Object cell = column_dtm.getValueAt(j, i);
+					columnValues[i][j] = cell == null ? "" : cell.toString();
 				}
 			}
 			for (i = 0; i < numberOfColumns; i++) {
 				for (j = 0; j < cols; j++) {
 					if (columnNames[i].equals(column_dtm.getColumnName(j))) {
-						if (!sdds.setColumn(i, columnValues[j], currentPage + 1, 1)) {
+						boolean stored;
+						if (sdds.getColumnType(i) == SDDSUtil.SDDS_ENUM)
+							stored = sdds.setColumnEnumCells(i,
+									enumCodes(sdds.getColumnEnumDefinition(i), columnValues[j], rows), currentPage + 1, 1);
+						else
+							stored = sdds.setColumn(i, columnValues[j], currentPage + 1, 1);
+						if (!stored) {
 							appendStatus("Error: " + sdds.getErrors());
 							return false;
 						}
@@ -918,12 +1044,14 @@ public class sddsEdit extends JFrame implements Printable {
 
 			arrayValues = new String[cols][rows];
 			for (i = 0; i < cols; i++) {
+				/* The end of an enum array is its last chosen state; a blank before that is an element. */
+				boolean isEnum = sdds.getArrayEnumDefinition(sdds.getArrayIndex(array_dtm.getColumnName(i))) != null;
 				for (j = 0; j < rows; j++) {
 					o = array_dtm.getValueAt(j, i);
 					if ((o != null) && (!o.toString().equals(s))) {
 						arrayValues[i][j] = o.toString();
 						elements[i] = j + 1;
-					} else {
+					} else if (!isEnum) {
 						break;
 					}
 				}
@@ -931,8 +1059,28 @@ public class sddsEdit extends JFrame implements Printable {
 			for (i = 0; i < numberOfArrays; i++) {
 				for (j = 0; j < cols; j++) {
 					if (arrayNames[i].equals(array_dtm.getColumnName(j))) {
-						sdds.setArrayDim(currentPage + 1, i, Arrays.copyOfRange(elements, j, j + 1));
-						if (!sdds.setArray(i, Arrays.copyOfRange(arrayValues[j], 0, elements[j]), currentPage + 1)) {
+						int[] dim = new int[] { elements[j] };
+						int dimensions = sdds.getArrayDimensions(i);
+						if (dimensions != 1) {
+							/* The table shows other shapes flattened, so their size cannot change here. */
+							dim = sdds.getArrayDim(currentPage + 1, i);
+							long size = dim == null ? 0 : 1;
+							for (int k = 0; (dim != null) && (k < dimensions); k++)
+								size *= dim[k];
+							if (size != elements[j]) {
+								appendStatus("Error: array " + arrayNames[i] + " has " + dimensions
+										+ " dimensions, so its number of elements cannot be changed here");
+								return false;
+							}
+						}
+						sdds.setArrayDim(currentPage + 1, i, dim);
+						boolean stored;
+						if (sdds.getArrayType(i) == SDDSUtil.SDDS_ENUM)
+							stored = sdds.setArrayEnumCells(i,
+									enumCodes(sdds.getArrayEnumDefinition(i), arrayValues[j], elements[j]), currentPage + 1);
+						else
+							stored = sdds.setArray(i, Arrays.copyOfRange(arrayValues[j], 0, elements[j]), currentPage + 1);
+						if (!stored) {
 							appendStatus("Error: " + sdds.getErrors());
 							return false;
 						}
@@ -1046,6 +1194,9 @@ public class sddsEdit extends JFrame implements Printable {
 				appendStatus("Error: " + sdds.getErrors());
 				return;
 			}
+			/* writeFile leaves a file with no row counts open for more rows, which the editor does not add. */
+			if (sdds.noRowCount)
+				sdds.closeOutput();
 			appendStatus("data saved to " + sdds.fileName);
 			frame.setTitle("SDDS Editor - " + sdds.fileName);
 		}
@@ -1081,6 +1232,9 @@ public class sddsEdit extends JFrame implements Printable {
 				appendStatus("Error: " + sdds.getErrors());
 				return;
 			}
+			/* writeFile leaves a file with no row counts open for more rows, which the editor does not add. */
+			if (sdds.noRowCount)
+				sdds.closeOutput();
 			appendStatus("data saved to " + sdds.fileName);
 			frame.setTitle("SDDS Editor - " + file);
 		}
@@ -1143,6 +1297,7 @@ public class sddsEdit extends JFrame implements Printable {
 				sddsEditAttributesDialog.setFormatString(sdds.getParameterFormatString(index));
 				sddsEditAttributesDialog.setType(sdds.getParameterType(index));
 				sddsEditAttributesDialog.setFixedValue(sdds.getParameterFixedValue(index));
+				sddsEditAttributesDialog.setEnumValues(sdds.getParameterEnumValues(index));
 
 				sddsEditAttributesDialog.setLocationRelativeTo(frame);
 				sddsEditAttributesDialog.setVisible(true);
@@ -1151,9 +1306,19 @@ public class sddsEdit extends JFrame implements Printable {
 				sdds.setParameterSymbol(index, sddsEditAttributesDialog.getSymbol());
 				sdds.setParameterUnits(index, sddsEditAttributesDialog.getUnits());
 				sdds.setParameterDescription(index, sddsEditAttributesDialog.getDescription());
-				sdds.setParameterFormatString(index, sddsEditAttributesDialog.getFormatString());
-				sdds.setParameterFixedValue(index, sddsEditAttributesDialog.getFixedValue());
+				boolean isEnum = sdds.getParameterEnumDefinition(index) != null;
+				/* Replacing a mapping converts a fixed code, which must not then be put back. */
+				String oldFixedValue = sdds.getParameterFixedValue(index);
+				if (isEnum && !changeEnumMapping(1, index, sddsEditAttributesDialog.getEnumValues()))
+					return;
+				if (!isEnum)
+					sdds.setParameterFormatString(index, sddsEditAttributesDialog.getFormatString());
+				if (!Objects.equals(oldFixedValue, sddsEditAttributesDialog.getFixedValue()))
+					sdds.setParameterFixedValue(index, sddsEditAttributesDialog.getFixedValue());
+				reportErrors();
 				sdds.renameParameter(name, sddsEditAttributesDialog.getName());
+				if (reportErrors())
+					return;
 				parameter_dlm.set(i, sddsEditAttributesDialog.getName());
 			}
 		}
@@ -1173,10 +1338,16 @@ public class sddsEdit extends JFrame implements Printable {
 			sddsEditAttributesDialog.setVisible(true);
 			if (sddsEditAttributesDialog.getName() == null)
 				return;
-			if (sdds.defineParameter(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
-					sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
-					sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getSDDSType(),
-					sddsEditAttributesDialog.getFixedValue()) == -1) {
+			boolean isEnum = sddsEditAttributesDialog.getSDDSType() == SDDSUtil.SDDS_ENUM;
+			if ((isEnum
+					? sdds.defineEnumParameter(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+							sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+							sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getEnumValues(),
+							sddsEditAttributesDialog.getFixedValue())
+					: sdds.defineParameter(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+							sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+							sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getSDDSType(),
+							sddsEditAttributesDialog.getFixedValue())) == -1) {
 				appendStatus("Error: " + sdds.getErrors());
 				return;
 			}
@@ -1188,12 +1359,19 @@ public class sddsEdit extends JFrame implements Printable {
 
 			pages = sdds.pageCount();
 			if (pages > 0) {
-				emptyData = new String[pages];
-				for (i = 0; i < pages; i++)
-					emptyData[i] = emptyString;
-				if (!sdds.setParameter(sddsEditAttributesDialog.getName(), emptyData, 1)) {
-					appendStatus("Error: " + sdds.getErrors());
-					return;
+				if (isEnum) {
+					/* Each page starts at the state of code 0, or with no state if that is unmapped. */
+					int newParameter = sdds.getParameterIndex(sddsEditAttributesDialog.getName());
+					for (i = 1; i <= pages; i++)
+						sdds.setParameterEnumCell(newParameter, null, i);
+				} else {
+					emptyData = new String[pages];
+					for (i = 0; i < pages; i++)
+						emptyData[i] = emptyString;
+					if (!sdds.setParameter(sddsEditAttributesDialog.getName(), emptyData, 1)) {
+						appendStatus("Error: " + sdds.getErrors());
+						return;
+					}
 				}
 			}
 			String[] parameterNames = null;
@@ -1204,7 +1382,7 @@ public class sddsEdit extends JFrame implements Printable {
 			parameterValues = new Object[numberOfParameters][1];
 			parameter_dlm.clear();
 			for (i = 0; i < numberOfParameters; i++) {
-				parameterValues[i][0] = sdds.getParameterValue(i, currentPage + 1, false);
+				parameterValues[i][0] = EnumCells.cell(sdds.getParameterValue(i, currentPage + 1, false));
 				parameter_dlm.addElement(parameterNames[i]);
 			}
 			parameter_dtm.setDataVector(parameterValues, new Object[1]);
@@ -1272,9 +1450,11 @@ public class sddsEdit extends JFrame implements Printable {
 				sddsEditAttributesDialog.setName(name);
 				sddsEditAttributesDialog.setSymbol(sdds.getColumnSymbol(index));
 				sddsEditAttributesDialog.setUnits(sdds.getColumnUnits(index));
+				sddsEditAttributesDialog.setDescription(sdds.getColumnDescription(index));
 				sddsEditAttributesDialog.setFormatString(sdds.getColumnFormatString(index));
 				sddsEditAttributesDialog.setType(sdds.getColumnType(index));
 				sddsEditAttributesDialog.setFieldLength(sdds.getColumnFieldLength(index));
+				sddsEditAttributesDialog.setEnumValues(sdds.getColumnEnumValues(index));
 
 				sddsEditAttributesDialog.setLocationRelativeTo(frame);
 				sddsEditAttributesDialog.setVisible(true);
@@ -1283,9 +1463,17 @@ public class sddsEdit extends JFrame implements Printable {
 				sdds.setColumnSymbol(index, sddsEditAttributesDialog.getSymbol());
 				sdds.setColumnUnits(index, sddsEditAttributesDialog.getUnits());
 				sdds.setColumnDescription(index, sddsEditAttributesDialog.getDescription());
-				sdds.setColumnFormatString(index, sddsEditAttributesDialog.getFormatString());
-				sdds.setColumnFieldLength(index, sddsEditAttributesDialog.getFieldLength());
+				if (sdds.getColumnEnumDefinition(index) != null) {
+					if (!changeEnumMapping(0, index, sddsEditAttributesDialog.getEnumValues()))
+						return;
+				} else {
+					sdds.setColumnFormatString(index, sddsEditAttributesDialog.getFormatString());
+					sdds.setColumnFieldLength(index, sddsEditAttributesDialog.getFieldLength());
+				}
+				reportErrors();
 				sdds.renameColumn(name, sddsEditAttributesDialog.getName());
+				if (reportErrors())
+					return;
 				String[] columnNames = null;
 				j = column_dtm.getColumnCount();
 				columnNames = new String[j];
@@ -1333,13 +1521,22 @@ public class sddsEdit extends JFrame implements Printable {
 			String[] emptyData;
 			String emptyString = "";
 			rows = column_dtm.getRowCount();
-			if (sdds.defineColumn(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
-					sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
-					sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getSDDSType(),
-					sddsEditAttributesDialog.getFieldLength()) == -1) {
+			boolean isEnum = sddsEditAttributesDialog.getSDDSType() == SDDSUtil.SDDS_ENUM;
+			if ((isEnum
+					? sdds.defineEnumColumn(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+							sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+							sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getEnumValues(),
+							sddsEditAttributesDialog.getFieldLength())
+					: sdds.defineColumn(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+							sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+							sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getSDDSType(),
+							sddsEditAttributesDialog.getFieldLength())) == -1) {
 				appendStatus("Error: " + sdds.getErrors());
 				return;
 			}
+			int newColumn = sdds.getColumnIndex(sddsEditAttributesDialog.getName());
+			if (isEnum)
+				emptyString = new EnumCells(sdds.getColumnEnumDefinition(newColumn)).defaultCell();
 			emptyData = new String[rows];
 			for (i = 0; i < rows; i++)
 				emptyData[i] = emptyString;
@@ -1359,11 +1556,7 @@ public class sddsEdit extends JFrame implements Printable {
 					tc.setWidth((columnNames[i].length() + 1) * 10);
 				}
 				tc.setHeaderRenderer(renderer);
-				if ((DefaultCellEditor) (column_dtcm.getColumn(i).getCellEditor()) == null) {
-					dce = new DefaultCellEditor(new JTextField());
-					dce.setClickCountToStart(1);
-					column_dtcm.getColumn(i).setCellEditor((TableCellEditor) dce);
-				}
+				installEditor(tc, sdds.getColumnEnumDefinition(i));
 			}
 			JTableHeader header = columnTable.getTableHeader();
 			header.addMouseListener(new HeaderListener(header, renderer));
@@ -1371,6 +1564,10 @@ public class sddsEdit extends JFrame implements Printable {
 			for (i = 1; i <= pages; i++) {
 				rows = sdds.getRowCount(i);
 				if (rows > 0) {
+					if (isEnum) {
+						sdds.setColumnBlankRows(newColumn, i, rows);
+						continue;
+					}
 					emptyData = new String[rows];
 					for (j = 0; j < rows; j++)
 						emptyData[j] = emptyString;
@@ -1427,10 +1624,12 @@ public class sddsEdit extends JFrame implements Printable {
 				sddsEditAttributesDialog.setName(name);
 				sddsEditAttributesDialog.setSymbol(sdds.getArraySymbol(index));
 				sddsEditAttributesDialog.setUnits(sdds.getArrayUnits(index));
+				sddsEditAttributesDialog.setDescription(sdds.getArrayDescription(index));
 				sddsEditAttributesDialog.setFormatString(sdds.getArrayFormatString(index));
 				sddsEditAttributesDialog.setType(sdds.getArrayType(index));
 				sddsEditAttributesDialog.setFieldLength(sdds.getArrayFieldLength(index));
 				sddsEditAttributesDialog.setGroupName(sdds.getArrayGroupName(index));
+				sddsEditAttributesDialog.setEnumValues(sdds.getArrayEnumValues(index));
 				// sddsEditAttributesDialog.setDimensions(sdds.getArrayDimensions(index));
 
 				sddsEditAttributesDialog.setLocationRelativeTo(frame);
@@ -1440,12 +1639,20 @@ public class sddsEdit extends JFrame implements Printable {
 				sdds.setArraySymbol(index, sddsEditAttributesDialog.getSymbol());
 				sdds.setArrayUnits(index, sddsEditAttributesDialog.getUnits());
 				sdds.setArrayDescription(index, sddsEditAttributesDialog.getDescription());
-				sdds.setArrayFormatString(index, sddsEditAttributesDialog.getFormatString());
-				sdds.setArrayFieldLength(index, sddsEditAttributesDialog.getFieldLength());
+				if (sdds.getArrayEnumDefinition(index) != null) {
+					if (!changeEnumMapping(2, index, sddsEditAttributesDialog.getEnumValues()))
+						return;
+				} else {
+					sdds.setArrayFormatString(index, sddsEditAttributesDialog.getFormatString());
+					sdds.setArrayFieldLength(index, sddsEditAttributesDialog.getFieldLength());
+				}
 				sdds.setArrayGroupName(index, sddsEditAttributesDialog.getGroupName());
 				// sdds.setArrayDimensions(index, sddsEditAttributesDialog.getDimensions());
 
+				reportErrors();
 				sdds.renameArray(name, sddsEditAttributesDialog.getName());
+				if (reportErrors())
+					return;
 				String[] arrayNames = null;
 				j = array_dtm.getColumnCount();
 				arrayNames = new String[j];
@@ -1496,11 +1703,18 @@ public class sddsEdit extends JFrame implements Printable {
 			dim = new int[1];
 			dim[0] = 0;
 			rows = array_dtm.getRowCount();
-			index = sdds.defineArray(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
-					sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
-					sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getGroupName(),
-					sddsEditAttributesDialog.getSDDSType(), sddsEditAttributesDialog.getFieldLength(),
-					sddsEditAttributesDialog.getDimensions());
+			if (sddsEditAttributesDialog.getSDDSType() == SDDSUtil.SDDS_ENUM)
+				index = sdds.defineEnumArray(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+						sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+						sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getGroupName(),
+						sddsEditAttributesDialog.getEnumValues(), sddsEditAttributesDialog.getFieldLength(),
+						sddsEditAttributesDialog.getDimensions());
+			else
+				index = sdds.defineArray(sddsEditAttributesDialog.getName(), sddsEditAttributesDialog.getSymbol(),
+						sddsEditAttributesDialog.getUnits(), sddsEditAttributesDialog.getDescription(),
+						sddsEditAttributesDialog.getFormatString(), sddsEditAttributesDialog.getGroupName(),
+						sddsEditAttributesDialog.getSDDSType(), sddsEditAttributesDialog.getFieldLength(),
+						sddsEditAttributesDialog.getDimensions());
 			if (index == -1) {
 				appendStatus("Error: " + sdds.getErrors());
 				return;
@@ -1524,11 +1738,7 @@ public class sddsEdit extends JFrame implements Printable {
 					tc.setWidth((arrayNames[i].length() + 1) * 10);
 				}
 				tc.setHeaderRenderer(renderer);
-				if ((DefaultCellEditor) (array_dtcm.getColumn(i).getCellEditor()) == null) {
-					dce = new DefaultCellEditor(new JTextField());
-					dce.setClickCountToStart(1);
-					array_dtcm.getColumn(i).setCellEditor((TableCellEditor) dce);
-				}
+				installEditor(tc, sdds.getArrayEnumDefinition(i));
 			}
 			JTableHeader header = arrayTable.getTableHeader();
 			header.addMouseListener(new HeaderListener(header, renderer));
@@ -1613,7 +1823,7 @@ public class sddsEdit extends JFrame implements Printable {
 					cols = column_dtm.getColumnCount();
 					emptyData = new String[cols];
 					for (i = 0; i < cols; i++)
-						emptyData[i] = emptyString;
+						emptyData[i] = newColumnCell(i).toString();
 					selectedIndex = columnTable.getSelectedRow();
 					if (selectedIndex == -1)
 						selectedIndex = 0;
@@ -1717,14 +1927,14 @@ public class sddsEdit extends JFrame implements Printable {
 
 					cols = array_dtm.getColumnCount();
 					emptyData = new String[cols];
-					for (i = 0; i < cols; i++)
-						emptyData[i] = emptyString;
 					selectedIndex = arrayTable.getSelectedRow();
 					if (selectedIndex == -1)
 						selectedIndex = 0;
 					if (arrayTable.isEditing()) {
 						arrayTable.getCellEditor().stopCellEditing();
 					}
+					for (i = 0; i < cols; i++)
+						emptyData[i] = newArrayCell(i, selectedIndex).toString();
 
 					for (i = 0; i < rows; i++) {
 						array_dtm.insertRow(selectedIndex, emptyData);
@@ -2011,7 +2221,7 @@ public class sddsEdit extends JFrame implements Printable {
 			int matches = 0;
 			columnMatch = new boolean[rows];
 			for (i = 0; i < rows; i++) {
-				if (columnMatch[i] = SDDSUtil.globMatch(column_dtm.getValueAt(i, index).toString(), pattern))
+				if (columnMatch[i] = SDDSUtil.globMatch(searchText(i, index), pattern))
 					matches++;
 			}
 			String[] elements = new String[matches];
@@ -2068,7 +2278,7 @@ public class sddsEdit extends JFrame implements Printable {
 		int matches = 0;
 		columnMatch = new boolean[rows];
 		for (i = 0; i < rows; i++) {
-			if (columnMatch[i] = SDDSUtil.globMatch(column_dtm.getValueAt(i, index).toString(), pattern))
+			if (columnMatch[i] = SDDSUtil.globMatch(searchText(i, index), pattern))
 				matches++;
 		}
 		String[] elements = new String[matches];

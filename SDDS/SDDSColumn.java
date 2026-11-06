@@ -11,6 +11,7 @@ package SDDS.java.SDDS;
 
 import java.io.*;
 import java.lang.reflect.*;
+import java.util.Arrays;
 //import hb.format.*;
 
 /**
@@ -37,10 +38,9 @@ public class SDDSColumn {
 	String columnFormatString;
 	int columnType;
 	int columnFieldLength;
-	long[][] longValue;
-	double[][] doubleValue;
-	String[][] stringValue;
-	char[][] characterValue;
+	/** One storage array per page; see SDDSValues. */
+	Object[] pages;
+	SDDSEnumDefinition enumDefinition;
 	int pageCount;
 	int[] rowCount;
 	final int SDDS_LONGDOUBLE = 1;
@@ -54,6 +54,7 @@ public class SDDSColumn {
 	final int SDDS_USHORT = 9;
 	final int SDDS_STRING = 10;
 	final int SDDS_CHARACTER = 11;
+	final int SDDS_ENUM = 12;
 
 	/**
 	 * Create a new SDDS column that can be used to store column information for
@@ -86,6 +87,7 @@ public class SDDSColumn {
 	 *                      <li><code>9</code> for ushort</li>
 	 *                      <li><code>10</code> for string</li>
 	 *                      <li><code>11</code> for character</li>
+	 *                      <li><code>12</code> for enum</li>
 	 *                      </ul>
 	 * @param field_length  has no effect currently
 	 */
@@ -187,6 +189,8 @@ public class SDDSColumn {
 	 * @param format_string format string of the column
 	 */
 	public void setFormat_String(String format_string) {
+		if ((columnType == SDDS_ENUM) && (SDDSNamelist.blankToNull(format_string) != null))
+			throw new IllegalArgumentException("Enum columns take no format string");
 		columnFormatString = format_string;
 	}
 
@@ -214,10 +218,12 @@ public class SDDSColumn {
 	 * @param field_length field length of the column
 	 */
 	public void setField_Length(int field_length) {
+		if ((columnType == SDDS_ENUM) && (field_length != 0))
+			throw new IllegalArgumentException("Enum columns take no field length");
 		columnFieldLength = field_length;
 	}
 
-	/**
+		/**
 	 * Returns the number of pages that the column contains
 	 *
 	 * @return The <code>int</code> value of the number of pages the column
@@ -235,18 +241,56 @@ public class SDDSColumn {
 	 *         <code>-1</code> if the page value is invalid.
 	 */
 	public int getRowCount(int page) {
-		int i;
-		if (rowCount == null)
-			return -1;
-		i = Array.getLength(rowCount);
-		if (page > i)
+		if ((rowCount == null) || (page < 1) || (page > rowCount.length))
 			return -1;
 		return rowCount[page - 1];
 	}
 
 	/**
+	 * Returns the dictionary of an enum column
+	 *
+	 * @return the dictionary, or <code>null</code> if this column is not an enum
+	 */
+	public SDDSEnumDefinition getEnumDefinition() {
+		return enumDefinition;
+	}
+
+	/**
+	 * Returns the canonical mapping text of an enum column
+	 *
+	 * @return the text of the <code>enum_values</code> attribute, or
+	 *         <code>null</code> if this column is not an enum
+	 */
+	public String getEnumValues() {
+		return enumDefinition == null ? null : enumDefinition.getValues();
+	}
+
+	/**
+	 * Give a new enum column its dictionary. A dictionary cannot be replaced this way;
+	 * use {@link #convert} for that.
+	 *
+	 * @param definition the dictionary
+	 * @throws IllegalArgumentException if this is not a new enum column
+	 */
+	public void setEnumDefinition(SDDSEnumDefinition definition) {
+		if ((columnType != SDDS_ENUM) || (enumDefinition != null) || (definition == null))
+			throw new IllegalArgumentException("A dictionary can only be given to a new enum column");
+		enumDefinition = definition;
+	}
+
+	private void growPages(int count) {
+		if (pages == null) {
+			pages = new Object[count];
+			rowCount = new int[count];
+		} else if (pages.length < count) {
+			pages = Arrays.copyOf(pages, count);
+			rowCount = Arrays.copyOf(rowCount, count);
+		}
+	}
+
+	/**
 	 * Inserts a blank page at the specified index
-	 * 
+	 *
 	 * @param page index of page to create insert
 	 * @return <code>true</code> on success<br>
 	 *         <code>false</code> on error.
@@ -257,189 +301,46 @@ public class SDDSColumn {
 			return true;
 		} else if ((page < 1) || (page > pageCount + 1)) {
 			return false;
-		} else {
-			int i;
-			switch (columnType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					longValue = (long[][]) SDDSUtil.resize(longValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						if (longValue[i] == null)
-							longValue[i] = new long[rowCount[i - 1]];
-						else
-							longValue[i] = (long[]) SDDSUtil.resize(longValue[i], rowCount[i - 1]);
-						longValue[i] = longValue[i - 1];
-					}
-					longValue[page - 1] = null;
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					doubleValue = (double[][]) SDDSUtil.resize(doubleValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						if (doubleValue[i] == null)
-							doubleValue[i] = new double[rowCount[i - 1]];
-						else
-							doubleValue[i] = (double[]) SDDSUtil.resize(doubleValue[i], rowCount[i - 1]);
-						doubleValue[i] = doubleValue[i - 1];
-					}
-					doubleValue[page - 1] = null;
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					stringValue = (String[][]) SDDSUtil.resize(stringValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						if (stringValue[i] == null)
-							stringValue[i] = new String[rowCount[i - 1]];
-						else
-							stringValue[i] = (String[]) SDDSUtil.resize(stringValue[i], rowCount[i - 1]);
-						stringValue[i] = stringValue[i - 1];
-					}
-					stringValue[page - 1] = null;
-					break;
-				case SDDS_CHARACTER:
-					characterValue = (char[][]) SDDSUtil.resize(characterValue, pageCount + 1);
-					for (i = pageCount; i >= page; i--) {
-						if (characterValue[i] == null)
-							characterValue[i] = new char[rowCount[i - 1]];
-						else
-							characterValue[i] = (char[]) SDDSUtil.resize(characterValue[i], rowCount[i - 1]);
-						characterValue[i] = characterValue[i - 1];
-					}
-					characterValue[page - 1] = null;
-					break;
-				default:
-					return false;
-			}
-			rowCount = (int[]) SDDSUtil.resize(rowCount, pageCount + 1);
-			for (i = pageCount; i >= page; i--)
-				rowCount[i] = rowCount[i - 1];
-			rowCount[page - 1] = 0;
-			pageCount++;
-			return true;
 		}
+		growPages(pageCount + 1);
+		for (int i = pageCount; i >= page; i--) {
+			pages[i] = pages[i - 1];
+			rowCount[i] = rowCount[i - 1];
+		}
+		pages[page - 1] = null;
+		rowCount[page - 1] = 0;
+		pageCount++;
+		return true;
 	}
 
 	/**
 	 * Delete a page at the specified index
-	 * 
+	 *
 	 * @param page index of page to delete
 	 * @return <code>true</code> on success<br>
 	 *         <code>false</code> on error.
 	 */
 	public boolean deletePage(int page) {
-		if ((page < 1) || (page > pageCount)) {
+		if ((page < 1) || (page > pageCount))
 			return false;
-		} else {
-			int i;
-			switch (columnType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					for (i = page; i < pageCount; i++) {
-						if (longValue[i - 1] == null)
-							longValue[i - 1] = new long[rowCount[i]];
-						else
-							longValue[i - 1] = (long[]) SDDSUtil.resize(longValue[i - 1], rowCount[i]);
-						longValue[i - 1] = longValue[i];
-					}
-					longValue = (long[][]) SDDSUtil.resize(longValue, pageCount - 1);
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					for (i = page; i < pageCount; i++) {
-						if (doubleValue[i - 1] == null)
-							doubleValue[i - 1] = new double[rowCount[i]];
-						else
-							doubleValue[i - 1] = (double[]) SDDSUtil.resize(doubleValue[i - 1], rowCount[i]);
-						doubleValue[i - 1] = doubleValue[i];
-					}
-					doubleValue = (double[][]) SDDSUtil.resize(doubleValue, pageCount - 1);
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					for (i = page; i < pageCount; i++) {
-						if (stringValue[i - 1] == null)
-							stringValue[i - 1] = new String[rowCount[i]];
-						else
-							stringValue[i - 1] = (String[]) SDDSUtil.resize(stringValue[i - 1], rowCount[i]);
-						stringValue[i - 1] = stringValue[i];
-					}
-					stringValue = (String[][]) SDDSUtil.resize(stringValue, pageCount - 1);
-					break;
-				case SDDS_CHARACTER:
-					for (i = page; i < pageCount; i++) {
-						if (characterValue[i - 1] == null)
-							characterValue[i - 1] = new char[rowCount[i]];
-						else
-							characterValue[i - 1] = (char[]) SDDSUtil.resize(characterValue[i - 1], rowCount[i]);
-						characterValue[i - 1] = characterValue[i];
-					}
-					characterValue = (char[][]) SDDSUtil.resize(characterValue, pageCount - 1);
-					break;
-				default:
-					return false;
-			}
-			for (i = page; i < pageCount; i++)
-				rowCount[i - 1] = rowCount[i];
-			rowCount = (int[]) SDDSUtil.resize(rowCount, pageCount - 1);
-			pageCount--;
-			return true;
+		for (int i = page; i < pageCount; i++) {
+			pages[i - 1] = pages[i];
+			rowCount[i - 1] = rowCount[i];
 		}
+		pages = Arrays.copyOf(pages, pageCount - 1);
+		rowCount = Arrays.copyOf(rowCount, pageCount - 1);
+		pageCount--;
+		return true;
 	}
 
 	/**
 	 * Create blank pages up to the last page specified
-	 * 
+	 *
 	 * @param lastpage last page to create blank page
 	 */
 	public void makeBlankPages(int lastpage) {
-		int n;
-		n = lastpage - pageCount;
-		if (n > 0) {
-			switch (columnType) {
-				case SDDS_SHORT:
-				case SDDS_USHORT:
-				case SDDS_LONG:
-				case SDDS_ULONG:
-				case SDDS_LONG64:
-				case SDDS_ULONG64:
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < lastpage)
-						longValue = (long[][]) SDDSUtil.resize(longValue, lastpage);
-					break;
-				case SDDS_FLOAT:
-				case SDDS_DOUBLE:
-					if (doubleValue == null)
-						doubleValue = new double[n][];
-					else if (Array.getLength(doubleValue) < lastpage)
-						doubleValue = (double[][]) SDDSUtil.resize(doubleValue, lastpage);
-				case SDDS_STRING:
-					if (stringValue == null)
-						stringValue = new String[n][];
-					else if (Array.getLength(stringValue) < lastpage)
-						stringValue = (String[][]) SDDSUtil.resize(stringValue, lastpage);
-				case SDDS_CHARACTER:
-					if (characterValue == null)
-						characterValue = new char[n][];
-					else if (Array.getLength(characterValue) < lastpage)
-						characterValue = (char[][]) SDDSUtil.resize(characterValue, lastpage);
-				default:
-					return;
-			}
-			if (rowCount == null)
-				rowCount = new int[lastpage];
-			else if (Array.getLength(rowCount) < lastpage)
-				rowCount = (int[]) SDDSUtil.resize(rowCount, lastpage);
+		if (lastpage > pageCount) {
+			growPages(lastpage);
 			pageCount = lastpage;
 		}
 	}
@@ -451,176 +352,57 @@ public class SDDSColumn {
 	 * @param row  the row of the column, must be greater then <code>0</code>
 	 */
 	public void deleteRow(int page, int row) {
-		if ((page < 1) || (row < 1))
-			return;
-		int i, n, rows;
-		if (rowCount == null)
-			return;
-		i = Array.getLength(rowCount);
-		if (page > i)
+		if ((page < 1) || (row < 1) || (rowCount == null) || (page > rowCount.length))
 			return;
 		page--;
-		rows = rowCount[page];
-		if (rows == 0)
+		int rows = rowCount[page];
+		if ((rows == 0) || (row > rows) || (pages[page] == null))
 			return;
-		switch (columnType) {
-			case SDDS_SHORT:
-			case SDDS_USHORT:
-			case SDDS_LONG:
-			case SDDS_ULONG:
-			case SDDS_LONG64:
-			case SDDS_ULONG64:
-				for (n = row; n < rows; n++) {
-					longValue[page][n - 1] = longValue[page][n];
-				}
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				for (n = row; n < rows; n++) {
-					doubleValue[page][n - 1] = doubleValue[page][n];
-				}
-				break;
-			case SDDS_STRING:
-				for (n = row; n < rows; n++) {
-					stringValue[page][n - 1] = stringValue[page][n];
-				}
-				break;
-			case SDDS_CHARACTER:
-				for (n = row; n < rows; n++) {
-					characterValue[page][n - 1] = characterValue[page][n];
-				}
-				break;
-			default:
-				return;
-		}
+		System.arraycopy(pages[page], row, pages[page], row - 1, rows - row);
 		rowCount[page]--;
+	}
+
+	/**
+	 * Copy stored values into a page, growing it as needed.
+	 *
+	 * @param data     values in storage form
+	 * @param count    number of values to copy
+	 * @param page     the page of the column, must be greater then <code>0</code>
+	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 */
+	void store(Object data, int count, int page, int startRow) {
+		if ((page < 1) || (startRow < 1))
+			return;
+		growPages(page);
+		page--;
+		startRow--;
+		int rowsNeeded = count + startRow;
+		Object current = pages[page];
+		if (current == null)
+			current = SDDSValues.newArray(columnType, rowsNeeded);
+		else if (Array.getLength(current) < rowsNeeded)
+			current = SDDSValues.copyOf(current, rowsNeeded);
+		System.arraycopy(data, 0, current, startRow, count);
+		pages[page] = current;
+		if (rowCount[page] < rowsNeeded)
+			rowCount[page] = rowsNeeded;
+		if (pageCount < page + 1)
+			pageCount = page + 1;
 	}
 
 	/**
 	 * Set the values of the column at a chosen page starting at the chosen row
 	 *
-	 * @param v        a long precision number array
+	 * @param v        a long precision number array. For a ulong64 column these are
+	 *                 the raw 64 bits. For an enum column these are codes.
 	 * @param page     the page of the column, must be greater then <code>0</code>
 	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if a code is not mapped by an enum column
 	 */
 	public void setValues(long v[], int page, int startRow) {
-		int n, rowsNeeded, arrayLength, i;
-		arrayLength = Array.getLength(v);
-		if ((page < 1) || (startRow < 1))
+		if (!SDDSUtil.isValidType(columnType))
 			return;
-		startRow--;
-		n = page - pageCount;
-		page--;
-		rowsNeeded = arrayLength + startRow;
-		switch (columnType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				System.arraycopy(v, 0, longValue[page], startRow, arrayLength);
-				break;
-			case SDDS_USHORT:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					longValue[page][i + startRow] = (int) (v[i] & 0xffff);
-				break;
-			case SDDS_ULONG:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					longValue[page][i + startRow] = (long) (v[i] & 0xffffffffL);
-				break;
-			case SDDS_ULONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					if (v[i] < 0)
-						v[i] = 0;
-				}
-				System.arraycopy(v, 0, longValue[page], startRow, arrayLength);
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0)
-					if (doubleValue == null)
-						doubleValue = new double[n][];
-					else if (Array.getLength(doubleValue) < page + 1)
-						doubleValue = (double[][]) SDDSUtil.resize(doubleValue, page + 1);
-				if (doubleValue[page] == null)
-					doubleValue[page] = new double[rowsNeeded];
-				else if (Array.getLength(doubleValue[page]) < rowsNeeded)
-					doubleValue[page] = (double[]) SDDSUtil.resize(doubleValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					doubleValue[page][i + startRow] = (double) v[i];
-				break;
-			case SDDS_STRING:
-				if (n > 0)
-					if (stringValue == null)
-						stringValue = new String[n][];
-					else if (Array.getLength(stringValue) < page + 1)
-						stringValue = (String[][]) SDDSUtil.resize(stringValue, page + 1);
-				if (stringValue[page] == null)
-					stringValue[page] = new String[rowsNeeded];
-				else if (Array.getLength(stringValue[page]) < rowsNeeded)
-					stringValue[page] = (String[]) SDDSUtil.resize(stringValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					stringValue[page][i + startRow] = Long.toString(v[i]);
-				break;
-			case SDDS_CHARACTER:
-				if (n > 0)
-					if (characterValue == null)
-						characterValue = new char[n][];
-					else if (Array.getLength(characterValue) < page + 1)
-						characterValue = (char[][]) SDDSUtil.resize(characterValue, page + 1);
-				if (characterValue[page] == null)
-					characterValue[page] = new char[rowsNeeded];
-				else if (Array.getLength(characterValue[page]) < rowsNeeded)
-					characterValue[page] = (char[]) SDDSUtil.resize(characterValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					characterValue[page][i + startRow] = (Long.toString(v[i])).charAt(0);
-				break;
-			default:
-				return;
-		}
-		if (rowCount == null)
-			rowCount = new int[page + 1];
-		else if (Array.getLength(rowCount) < page + 1)
-			rowCount = (int[]) SDDSUtil.resize(rowCount, page + 1);
-		if (rowCount[page] < rowsNeeded)
-			rowCount[page] = rowsNeeded;
-		if (n > 0)
-			pageCount = page + 1;
-		return;
+		store(SDDSValues.fromLongs(columnType, v, enumDefinition), v.length, page, startRow);
 	}
 
 	/**
@@ -629,315 +411,233 @@ public class SDDSColumn {
 	 * @param v        a double precision floating-point number array
 	 * @param page     the page of the column, must be greater then <code>0</code>
 	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if this is an enum column
 	 */
 	public void setValues(double v[], int page, int startRow) {
-		int n, rowsNeeded, arrayLength, i;
-		arrayLength = Array.getLength(v);
-		if ((page < 1) || (startRow < 1))
+		if (!SDDSUtil.isValidType(columnType))
 			return;
-		startRow--;
-		n = page - pageCount;
-		page--;
-		rowsNeeded = arrayLength + startRow;
-		switch (columnType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					longValue[page][i + startRow] = (long) v[i];
-				break;
-			case SDDS_USHORT:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					longValue[page][i + startRow] = (int) ((int) v[i] & 0xffff);
-				break;
-			case SDDS_ULONG:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					longValue[page][i + startRow] = (long) ((long) v[i] & 0xffffffffL);
-				break;
-			case SDDS_ULONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					longValue[page][i + startRow] = (long) v[i];
-					if (longValue[page][i + startRow] < 0)
-						longValue[page][i + startRow] = 0;
-				}
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0)
-					if (doubleValue == null)
-						doubleValue = new double[n][];
-					else if (Array.getLength(doubleValue) < page + 1)
-						doubleValue = (double[][]) SDDSUtil.resize(doubleValue, page + 1);
-				if (doubleValue[page] == null)
-					doubleValue[page] = new double[rowsNeeded];
-				else if (Array.getLength(doubleValue[page]) < rowsNeeded)
-					doubleValue[page] = (double[]) SDDSUtil.resize(doubleValue[page], rowsNeeded);
-				System.arraycopy(v, 0, doubleValue[page], startRow, arrayLength);
-				break;
-			case SDDS_STRING:
-				if (n > 0)
-					if (stringValue == null)
-						stringValue = new String[n][];
-					else if (Array.getLength(stringValue) < page + 1)
-						stringValue = (String[][]) SDDSUtil.resize(stringValue, page + 1);
-				if (stringValue[page] == null)
-					stringValue[page] = new String[rowsNeeded];
-				else if (Array.getLength(stringValue[page]) < rowsNeeded)
-					stringValue[page] = (String[]) SDDSUtil.resize(stringValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					stringValue[page][i + startRow] = Double.toString(v[i]);
-				break;
-			case SDDS_CHARACTER:
-				if (n > 0)
-					if (characterValue == null)
-						characterValue = new char[n][];
-					else if (Array.getLength(characterValue) < page + 1)
-						characterValue = (char[][]) SDDSUtil.resize(characterValue, page + 1);
-				if (characterValue[page] == null)
-					characterValue[page] = new char[rowsNeeded];
-				else if (Array.getLength(characterValue[page]) < rowsNeeded)
-					characterValue[page] = (char[]) SDDSUtil.resize(characterValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++)
-					characterValue[page][i + startRow] = (Double.toString(v[i])).charAt(0);
-				break;
-			default:
-				return;
-		}
-		if (rowCount == null)
-			rowCount = new int[page + 1];
-		else if (Array.getLength(rowCount) < page + 1)
-			rowCount = (int[]) SDDSUtil.resize(rowCount, page + 1);
-		if (rowCount[page] < rowsNeeded)
-			rowCount[page] = rowsNeeded;
-		if (n > 0)
-			pageCount = page + 1;
-		return;
+		store(SDDSValues.fromDoubles(columnType, v), v.length, page, startRow);
 	}
 
 	/**
 	 * Set the values of the column at a chosen page starting at the chosen row
 	 *
-	 * @param v        a string value array
+	 * @param v        a string value array. For an enum column these are decimal
+	 *                 codes.
 	 * @param page     the page of the column, must be greater then <code>0</code>
 	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if a value is not a code mapped by an enum
+	 *                                  column
 	 */
 	public void setValues(String v[], int page, int startRow) {
-		int n, rowsNeeded, arrayLength, i;
-		arrayLength = Array.getLength(v);
-		if ((page < 1) || (startRow < 1))
+		if (!SDDSUtil.isValidType(columnType))
 			return;
-		startRow--;
-		n = page - pageCount;
-		page--;
-		rowsNeeded = arrayLength + startRow;
-		switch (columnType) {
-			case SDDS_SHORT:
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					try {
-						longValue[page][i + startRow] = (Long.valueOf(v[i])).longValue();
-					} catch (Exception e) {
-						longValue[page][i + startRow] = (long) 0;
-					}
-				}
-				break;
-			case SDDS_USHORT:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					try {
-						longValue[page][i + startRow] = (int) ((Long.valueOf(v[i])).intValue() & 0xffff);
-					} catch (Exception e) {
-						longValue[page][i + startRow] = (long) 0;
-					}
-				}
-				break;
-			case SDDS_ULONG:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					try {
-						longValue[page][i + startRow] = (long) ((Long.valueOf(v[i])).longValue() & 0xffffffffL);
-					} catch (Exception e) {
-						longValue[page][i + startRow] = (long) 0;
-					}
-				}
-				break;
-			case SDDS_ULONG64:
-				if (n > 0)
-					if (longValue == null)
-						longValue = new long[n][];
-					else if (Array.getLength(longValue) < page + 1)
-						longValue = (long[][]) SDDSUtil.resize(longValue, page + 1);
-				if (longValue[page] == null)
-					longValue[page] = new long[rowsNeeded];
-				else if (Array.getLength(longValue[page]) < rowsNeeded)
-					longValue[page] = (long[]) SDDSUtil.resize(longValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					try {
-						longValue[page][i + startRow] = (Long.valueOf(v[i])).longValue();
-						if (longValue[page][i + startRow] < 0)
-							longValue[page][i + startRow] = 0;
-					} catch (Exception e) {
-						longValue[page][i + startRow] = (long) 0;
-					}
-				}
-				break;
-			case SDDS_FLOAT:
-			case SDDS_DOUBLE:
-				if (n > 0)
-					if (doubleValue == null)
-						doubleValue = new double[n][];
-					else if (Array.getLength(doubleValue) < page + 1)
-						doubleValue = (double[][]) SDDSUtil.resize(doubleValue, page + 1);
-				if (doubleValue[page] == null)
-					doubleValue[page] = new double[rowsNeeded];
-				else if (Array.getLength(doubleValue[page]) < rowsNeeded)
-					doubleValue[page] = (double[]) SDDSUtil.resize(doubleValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					try {
-						doubleValue[page][i + startRow] = (Double.valueOf(v[i])).doubleValue();
-					} catch (Exception e) {
-						doubleValue[page][i + startRow] = (double) 0;
-					}
-				}
-				break;
-			case SDDS_STRING:
-				if (n > 0)
-					if (stringValue == null)
-						stringValue = new String[n][];
-					else if (Array.getLength(stringValue) < page + 1)
-						stringValue = (String[][]) SDDSUtil.resize(stringValue, page + 1);
-				if (stringValue[page] == null)
-					stringValue[page] = new String[rowsNeeded];
-				else if (Array.getLength(stringValue[page]) < rowsNeeded)
-					stringValue[page] = (String[]) SDDSUtil.resize(stringValue[page], rowsNeeded);
-				System.arraycopy(v, 0, stringValue[page], startRow, arrayLength);
-				break;
-			case SDDS_CHARACTER:
-				if (n > 0)
-					if (characterValue == null)
-						characterValue = new char[n][];
-					else if (Array.getLength(characterValue) < page + 1)
-						characterValue = (char[][]) SDDSUtil.resize(characterValue, page + 1);
-				if (characterValue[page] == null)
-					characterValue[page] = new char[rowsNeeded];
-				else if (Array.getLength(characterValue[page]) < rowsNeeded)
-					characterValue[page] = (char[]) SDDSUtil.resize(characterValue[page], rowsNeeded);
-				for (i = 0; i < arrayLength; i++) {
-					if (v[i].length() > 0) {
-						characterValue[page][i + startRow] = v[i].charAt(0);
-					} else {
-						characterValue[page][i + startRow] = '0';
-					}
-				}
-				break;
-			default:
-				return;
-		}
-		if (rowCount == null)
-			rowCount = new int[page + 1];
-		else if (Array.getLength(rowCount) < page + 1)
-			rowCount = (int[]) SDDSUtil.resize(rowCount, page + 1);
-		if (rowCount[page] < rowsNeeded)
-			rowCount[page] = rowsNeeded;
-		if (n > 0)
-			pageCount = page + 1;
-		return;
+		store(SDDSValues.fromStrings(columnType, v, enumDefinition), v.length, page, startRow);
 	}
 
 	/**
-	 * Write the header to a file.
-	 * 
+	 * Set the values of a longdouble column at a chosen page starting at the chosen
+	 * row, without any loss of precision
+	 *
+	 * @param v        a long double array
+	 * @param page     the page of the column, must be greater then <code>0</code>
+	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if this is not a longdouble column
+	 */
+	public void setValues(SDDSLongDouble v[], int page, int startRow) {
+		if (columnType != SDDS_LONGDOUBLE)
+			throw new IllegalArgumentException("Column " + columnName + " is not a longdouble column");
+		store(v, v.length, page, startRow);
+	}
+
+	/**
+	 * Set the labels of an enum column at a chosen page starting at the chosen row
+	 *
+	 * @param labels   labels from the dictionary
+	 * @param page     the page of the column, must be greater then <code>0</code>
+	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if a label is not in the dictionary
+	 */
+	public void setLabels(String labels[], int page, int startRow) {
+		store(SDDSValues.convert(SDDS_STRING, null, SDDS_ENUM, requireDictionary(), labels, labels.length),
+				labels.length, page, startRow);
+	}
+
+	private SDDSEnumDefinition requireDictionary() {
+		if (enumDefinition == null)
+			throw new IllegalArgumentException("Column " + columnName + " is not an enum column");
+		return enumDefinition;
+	}
+
+	/**
+	 * Set enum values where some may not have been chosen yet, as an interactive program
+	 * needs to. A chosen code is checked. A <code>null</code> is stored as code 0, with
+	 * no dictionary check, so the file cannot be written until it has a mapped code.
+	 *
+	 * @param codes    codes, with <code>null</code> for a value not chosen yet
+	 * @param page     the page of the column, must be greater then <code>0</code>
+	 * @param startRow the row of the column, must be greater then <code>0</code>
+	 * @throws IllegalArgumentException if a code is not mapped
+	 */
+	public void setEnumCells(Integer codes[], int page, int startRow) {
+		store(SDDSValues.enumCells(requireDictionary(), codes), codes.length, page, startRow);
+	}
+
+	/**
+	 * Extend a page to a number of rows holding zero values, with no dictionary check.
+	 * This is how a program represents enum values that have not been chosen yet. The
+	 * file cannot be written until they hold mapped codes.
+	 *
+	 * @param page the page of the column, must be greater then <code>0</code>
+	 * @param rows number of rows the page should have
+	 */
+	public void setBlankRows(int page, int rows) {
+		int current = Math.max(getRowCount(page), 0);
+		if ((page >= 1) && (rows > current))
+			store(SDDSValues.newArray(columnType, rows - current), rows - current, page, current + 1);
+	}
+
+	/**
+	 * Returns the codes of an enum column on a chosen page
+	 *
+	 * @param page the page of the column, must be greater then <code>0</code>
+	 * @return the codes, or <code>null</code> if this is not an enum column or the
+	 *         page has no data
+	 */
+	public int[] getEnumCodes(int page) {
+		if ((columnType != SDDS_ENUM) || (page < 1) || (page > pageCount))
+			return null;
+		long[] data = (long[]) pages[page - 1];
+		if (data == null)
+			return null;
+		int[] codes = new int[rowCount[page - 1]];
+		for (int i = 0; i < codes.length; i++)
+			codes[i] = (int) data[i];
+		return codes;
+	}
+
+	/**
+	 * Returns the labels of an enum column on a chosen page
+	 *
+	 * @param page the page of the column, must be greater then <code>0</code>
+	 * @return the labels, with <code>null</code> for any value whose code is not
+	 *         mapped, or <code>null</code> if this is not an enum column or the page
+	 *         has no data
+	 */
+	public String[] getEnumLabels(int page) {
+		int[] codes = getEnumCodes(page);
+		if (codes == null)
+			return null;
+		String[] labels = new String[codes.length];
+		for (int i = 0; i < codes.length; i++)
+			labels[i] = enumDefinition.codeToLabel(codes[i]);
+		return labels;
+	}
+
+	/**
+	 * Find the first value on a page that an enum column cannot write
+	 *
+	 * @param page the page of the column
+	 * @return the row, starting from <code>1</code>, or <code>0</code> if all are
+	 *         valid
+	 */
+	int firstInvalidRow(int page) {
+		if ((columnType != SDDS_ENUM) || (page < 1) || (page > pageCount) || (pages[page - 1] == null))
+			return 0;
+		long[] data = (long[]) pages[page - 1];
+		for (int i = 0; i < rowCount[page - 1]; i++)
+			if ((enumDefinition == null) || !enumDefinition.hasCode(data[i]))
+				return i + 1;
+		return 0;
+	}
+
+	/**
+	 * Convert this column in place between enum, long and string. Every value is
+	 * checked before any is changed.
+	 *
+	 * @param targetType <code>SDDS_ENUM</code>, <code>SDDS_LONG</code> or
+	 *                   <code>SDDS_STRING</code>
+	 * @param target     dictionary for an enum target, otherwise <code>null</code>
+	 * @throws IllegalArgumentException if the conversion is not allowed or a value
+	 *                                  cannot be converted
+	 */
+	public void convert(int targetType, SDDSEnumDefinition target) {
+		if (!SDDSValues.isConversion(columnType, targetType) || ((targetType == SDDS_ENUM) && (target == null)))
+			throw new IllegalArgumentException("Invalid enum conversion for column " + columnName);
+		Object[] converted = new Object[pageCount];
+		for (int i = 0; i < pageCount; i++)
+			if ((pages != null) && (pages[i] != null))
+				converted[i] = SDDSValues.convert(columnType, enumDefinition, targetType, target, pages[i],
+						rowCount[i]);
+		pages = converted;
+		rowCount = rowCount == null ? new int[pageCount] : Arrays.copyOf(rowCount, pageCount);
+		columnType = targetType;
+		enumDefinition = target;
+		columnFormatString = null;
+		columnFieldLength = 0;
+	}
+
+	/**
+	 * Copy the values of another column of the same type
+	 *
+	 * @param source column to copy from
+	 */
+	void copyValues(SDDSColumn source) {
+		pageCount = source.pageCount;
+		pages = source.pages == null ? null : new Object[source.pages.length];
+		rowCount = source.rowCount == null ? null : source.rowCount.clone();
+		for (int i = 0; (pages != null) && (i < pages.length); i++)
+			if (source.pages[i] != null)
+				pages[i] = SDDSValues.copyOf(source.pages[i], Array.getLength(source.pages[i]));
+	}
+
+	/**
+	 * Write the header to a file using the format of SDDS protocol 1 to 5.
+	 *
 	 * @param dos a valid DataOutputStream
 	 * @return <code>true</code> if the header was successfully written<br>
 	 *         <code>false</code> if an error occured
 	 */
 	public boolean writeHeader(DataOutputStream dos) {
-		String line;
+		return writeHeader(dos, columnType == SDDS_ENUM ? 6 : 5);
+	}
+
+	/**
+	 * Write the header to a file.
+	 *
+	 * @param dos     a valid DataOutputStream
+	 * @param version protocol version of the file being written
+	 * @return <code>true</code> if the header was successfully written<br>
+	 *         <code>false</code> if an error occured
+	 */
+	public boolean writeHeader(DataOutputStream dos, int version) {
 		if (columnName == null)
 			return false;
-		line = "&column name=" + columnName + ", ";
-		if (columnSymbol != null) {
-			line = line.concat("symbol=" + SDDSUtil.prepareString(columnSymbol) + ", ");
-		}
-		if (columnUnits != null) {
-			line = line.concat("units=" + SDDSUtil.prepareString(columnUnits) + ", ");
-		}
-		if (columnDescription != null) {
-			line = line.concat("description=" + SDDSUtil.prepareString(columnDescription) + ", ");
-		}
-		if (columnFormatString != null) {
-			line = line.concat("format_string=" + SDDSUtil.prepareString(columnFormatString) + ", ");
-		}
-		line = line.concat("type=" + SDDSUtil.getTypeName(columnType) + ", ");
-		line = line.concat("&end\n");
 		try {
-			dos.writeBytes(line);
+			if (version == 6) {
+				String line = "&column " + SDDSNamelist.field6("name", columnName)
+						+ SDDSNamelist.field6("symbol", columnSymbol) + SDDSNamelist.field6("units", columnUnits)
+						+ SDDSNamelist.field6("description", columnDescription)
+						+ SDDSNamelist.field6("format_string", SDDSNamelist.blankToNull(columnFormatString)) + "type="
+						+ SDDSUtil.getTypeName(columnType) + ", field_length=0, "
+						+ SDDSNamelist.field6("enum_values", getEnumValues()) + " &end\n";
+				dos.write(SDDSNamelist.finish6(line));
+			} else {
+				dos.writeBytes("&column " + SDDSNamelist.legacyField("name", columnName)
+						+ SDDSNamelist.legacyField("symbol", SDDSNamelist.blankToNull(columnSymbol))
+						+ SDDSNamelist.legacyField("units", SDDSNamelist.blankToNull(columnUnits))
+						+ SDDSNamelist.legacyField("description", SDDSNamelist.blankToNull(columnDescription))
+						+ SDDSNamelist.legacyField("format_string", SDDSNamelist.blankToNull(columnFormatString))
+						+ SDDSNamelist.legacyField("type", SDDSUtil.getTypeName(columnType)) + " &end\n");
+			}
 		} catch (Exception e) {
 			return false;
 		}
 		return true;
+	}
+
+	private boolean validRow(int page, int row) {
+		return (pageCount != 0) && (page >= 1) && (page <= pageCount) && (row >= 1) && (row <= rowCount[page - 1]);
 	}
 
 	/**
@@ -953,108 +653,13 @@ public class SDDSColumn {
 	 *         the column type is undefined.
 	 */
 	public boolean writeElement(DataOutputStream dos, int page, int row, boolean ascii) {
-		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (row < 1) || (row > rowCount[page - 1]))
+		if (!validRow(page, row))
 			return false;
-		page--;
-		row--;
 		try {
-			if (ascii) {
-				switch (columnType) {
-					case SDDS_SHORT:
-						dos.writeBytes((short) longValue[page][row] + " ");
-						break;
-					case SDDS_USHORT:
-						dos.writeBytes((int) (longValue[page][row] & 0xffff) + " ");
-						break;
-					case SDDS_LONG:
-						dos.writeBytes((int) longValue[page][row] + " ");
-						break;
-					case SDDS_ULONG:
-						dos.writeBytes((long) (longValue[page][row] & 0xffffffffL) + " ");
-						break;
-					case SDDS_LONG64:
-						dos.writeBytes((long) longValue[page][row] + " ");
-						break;
-					case SDDS_ULONG64:
-						if (longValue[page][row] < 0)
-							longValue[page][row] = 0;
-						dos.writeBytes((long) longValue[page][row] + " ");
-						break;
-					case SDDS_FLOAT:
-						dos.writeBytes((float) doubleValue[page][row] + " ");
-						break;
-					case SDDS_DOUBLE:
-						dos.writeBytes(doubleValue[page][row] + " ");
-						break;
-					case SDDS_LONGDOUBLE:
-						return false;
-					case SDDS_STRING:
-						if (stringValue[page][row] == null)
-							stringValue[page][row] = "";
-						dos.writeBytes(SDDSUtil.prepareString(stringValue[page][row]) + " ");
-						break;
-					case SDDS_CHARACTER:
-						if (Character.isLetterOrDigit(characterValue[page][row])) {
-							dos.writeBytes(characterValue[page][row] + " ");
-						} else {
-							String temp;
-							temp = Integer.toOctalString(characterValue[page][row]);
-							while (temp.length() < 3)
-								temp = "0" + temp;
-							dos.writeBytes("\\" + temp + " ");
-						}
-						break;
-					default:
-						return false;
-				}
-			} else {
-				switch (columnType) {
-					case SDDS_SHORT:
-						dos.writeShort((short) longValue[page][row]);
-						break;
-					case SDDS_USHORT:
-						dos.writeShort((short) (longValue[page][row] & 0xffff));
-						break;
-					case SDDS_LONG:
-						dos.writeInt((int) longValue[page][row]);
-						break;
-					case SDDS_ULONG:
-						dos.writeInt((int) (longValue[page][row] & 0xffffffffL));
-						break;
-					case SDDS_LONG64:
-						dos.writeLong((long) longValue[page][row]);
-						break;
-					case SDDS_ULONG64:
-						if (longValue[page][row] < 0)
-							longValue[page][row] = 0;
-						dos.writeLong((long) longValue[page][row]);
-						break;
-					case SDDS_FLOAT:
-						dos.writeFloat((float) doubleValue[page][row]);
-						break;
-					case SDDS_DOUBLE:
-						dos.writeDouble(doubleValue[page][row]);
-						break;
-					case SDDS_LONGDOUBLE:
-						return false;
-					case SDDS_STRING:
-						if (stringValue[page][row] == null) {
-							dos.writeInt(0);
-						} else {
-							dos.writeInt(stringValue[page][row].length());
-							dos.writeBytes(stringValue[page][row]);
-						}
-						break;
-					case SDDS_CHARACTER: /*
-											 * note that to be compatable with existing software we must use writeByte
-											 * instead of writeChar
-											 */
-						dos.writeByte((int) characterValue[page][row]);
-						break;
-					default:
-						return false;
-				}
-			}
+			if (ascii)
+				dos.writeBytes(SDDSValues.asciiText(columnType, pages[page - 1], row - 1) + " ");
+			else
+				SDDSValues.writeBinary(dos, columnType, pages[page - 1], row - 1, true);
 		} catch (Exception e) {
 			return false;
 		}
@@ -1072,58 +677,11 @@ public class SDDSColumn {
 	 *         the column type is undefined.
 	 */
 	public boolean writeElement(LEDataOutputStream ledos, int page, int row) {
-		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (row < 1) || (row > rowCount[page - 1]))
+		if (!validRow(page, row))
 			return false;
-		page--;
-		row--;
 		try {
-			switch (columnType) {
-				case SDDS_SHORT:
-					ledos.writeShort((short) longValue[page][row]);
-					break;
-				case SDDS_USHORT:
-					ledos.writeShort((short) (longValue[page][row] & 0xffff));
-					break;
-				case SDDS_LONG:
-					ledos.writeInt((int) longValue[page][row]);
-					break;
-				case SDDS_ULONG:
-					ledos.writeInt((int) (longValue[page][row] & 0xffffffffL));
-					break;
-				case SDDS_LONG64:
-					ledos.writeLong((long) longValue[page][row]);
-					break;
-				case SDDS_ULONG64:
-					if (longValue[page][row] < 0)
-						longValue[page][row] = 0;
-					ledos.writeLong((long) longValue[page][row]);
-					break;
-				case SDDS_FLOAT:
-					ledos.writeFloat((float) doubleValue[page][row]);
-					break;
-				case SDDS_DOUBLE:
-					ledos.writeDouble(doubleValue[page][row]);
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					if (stringValue[page][row] == null) {
-						ledos.writeInt(0);
-					} else {
-						ledos.writeInt(stringValue[page][row].length());
-						ledos.writeBytes(stringValue[page][row]);
-					}
-					break;
-				case SDDS_CHARACTER: /*
-										 * note that to be compatable with existing software we must use writeByte
-										 * instead of writeChar
-										 */
-					ledos.writeByte((int) characterValue[page][row]);
-					break;
-				default:
-					return false;
-			}
-		} catch (IOException e) {
+			SDDSValues.writeBinary(ledos, columnType, pages[page - 1], row - 1, false);
+		} catch (Exception e) {
 			return false;
 		}
 		return true;
@@ -1139,82 +697,12 @@ public class SDDSColumn {
 	 *         the column type is undefined.
 	 */
 	public boolean writeColumn(DataOutputStream dos, int page) {
-		int i, j;
 		if ((pageCount == 0) || (page < 1) || (page > pageCount))
 			return false;
 		page--;
 		try {
-			switch (columnType) {
-				case SDDS_SHORT:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((short) longValue[page][i] + "\n");
-					break;
-				case SDDS_USHORT:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((short) (longValue[page][i] & 0xffff) + "\n");
-					break;
-				case SDDS_LONG:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((int) longValue[page][i] + "\n");
-					break;
-				case SDDS_ULONG:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((int) (longValue[page][i] & 0xffffffffL) + "\n");
-					break;
-				case SDDS_LONG64:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((long) longValue[page][i] + "\n");
-					break;
-				case SDDS_ULONG64:
-					j = Array.getLength(longValue[page]);
-					for (i = 0; i < j; i++) {
-						if (longValue[page][i] < 0)
-							longValue[page][i] = 0;
-						dos.writeBytes((long) longValue[page][i] + "\n");
-					}
-					break;
-				case SDDS_FLOAT:
-					j = Array.getLength(doubleValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes((float) doubleValue[page][i] + "\n");
-					break;
-				case SDDS_DOUBLE:
-					j = Array.getLength(doubleValue[page]);
-					for (i = 0; i < j; i++)
-						dos.writeBytes(doubleValue[page][i] + "\n");
-					break;
-				case SDDS_LONGDOUBLE:
-					return false;
-				case SDDS_STRING:
-					j = Array.getLength(stringValue[page]);
-					for (i = 0; i < j; i++) {
-						if (stringValue[page][i] == null)
-							stringValue[page][i] = "";
-						dos.writeBytes(SDDSUtil.prepareString(stringValue[page][i]) + "\n");
-					}
-					break;
-				case SDDS_CHARACTER:
-					String temp;
-					j = Array.getLength(characterValue[page]);
-					for (i = 0; i < j; i++) {
-						if (Character.isLetterOrDigit(characterValue[page][i])) {
-							dos.writeBytes(characterValue[page][i] + "\n");
-						} else {
-							temp = Integer.toOctalString(characterValue[page][i]);
-							while (temp.length() < 3)
-								temp = "0" + temp;
-							dos.writeBytes("\\" + temp + "\n");
-						}
-					}
-					break;
-				default:
-					return false;
-			}
+			for (int i = 0; i < rowCount[page]; i++)
+				dos.writeBytes(SDDSValues.asciiText(columnType, pages[page], i) + "\n");
 		} catch (Exception e) {
 			return false;
 		}
@@ -1222,7 +710,10 @@ public class SDDSColumn {
 	}
 
 	/**
-	 * Get the values of the column for a chosen page
+	 * Get the values of the column for a chosen page. An enum column gives
+	 * {@link SDDSEnumValue} objects and a ulong64 column gives <code>Long</code>
+	 * objects, or <code>BigInteger</code> objects for values too large for a
+	 * <code>Long</code>.
 	 *
 	 * @param page          the page of the column, must be greater then
 	 *                      <code>0</code>
@@ -1232,111 +723,12 @@ public class SDDSColumn {
 	 * @return Object array of data
 	 */
 	public Object[] getValues(int page, boolean string_quotes) {
-		Object values[];
-		int i, j;
-		if ((pageCount == 0) || (page < 1) || (page > pageCount))
+		if ((pageCount == 0) || (page < 1) || (page > pageCount) || (pages[page - 1] == null))
 			return null;
 		page--;
-		switch (columnType) {
-			case SDDS_SHORT:
-				if (longValue[page] == null)
-					return null;
-				j = Array.getLength(longValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Short.valueOf((short) longValue[page][i]);
-				break;
-			case SDDS_USHORT:
-				if (longValue[page] == null)
-					return null;
-				j = Array.getLength(longValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Integer.valueOf((int) (longValue[page][i] & 0xffff));
-				break;
-			case SDDS_LONG:
-			case SDDS_LONG64:
-				if (longValue[page] == null)
-					return null;
-				j = Array.getLength(longValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Long.valueOf(longValue[page][i]);
-				break;
-			case SDDS_ULONG:
-				if (longValue[page] == null)
-					return null;
-				j = Array.getLength(longValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Long.valueOf((long) (longValue[page][i] & 0xffffffffL));
-				break;
-			case SDDS_ULONG64:
-				if (longValue[page] == null)
-					return null;
-				j = Array.getLength(longValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++) {
-					if (longValue[page][i] < 0)
-						longValue[page][i] = 0;
-					values[i] = Long.valueOf(longValue[page][i]);
-				}
-				break;
-			case SDDS_FLOAT:
-				if (doubleValue[page] == null)
-					return null;
-				j = Array.getLength(doubleValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Float.valueOf((float) doubleValue[page][i]);
-				break;
-			case SDDS_DOUBLE:
-				if (doubleValue[page] == null)
-					return null;
-				j = Array.getLength(doubleValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++)
-					values[i] = Double.valueOf(doubleValue[page][i]);
-				break;
-			case SDDS_STRING:
-				if (stringValue[page] == null)
-					return null;
-				j = Array.getLength(stringValue[page]);
-				values = new Object[j];
-				if (string_quotes) {
-					for (i = 0; i < j; i++) {
-						if (stringValue[page][i] == null)
-							stringValue[page][i] = "";
-						values[i] = SDDSUtil.prepareString(stringValue[page][i]);
-					}
-				} else {
-					for (i = 0; i < j; i++) {
-						if (stringValue[page][i] == null)
-							stringValue[page][i] = "";
-						values[i] = stringValue[page][i];
-					}
-				}
-				break;
-			case SDDS_CHARACTER:
-				if (characterValue[page] == null)
-					return null;
-				String temp;
-				j = Array.getLength(characterValue[page]);
-				values = new Object[j];
-				for (i = 0; i < j; i++) {
-					if (Character.isLetterOrDigit(characterValue[page][i])) {
-						values[i] = Character.toString(characterValue[page][i]);
-					} else {
-						temp = Integer.toOctalString(characterValue[page][i]);
-						while (temp.length() < 3)
-							temp = "0" + temp;
-						values[i] = "\\" + temp;
-					}
-				}
-				break;
-			default:
-				return null;
-		}
+		Object[] values = new Object[rowCount[page]];
+		for (int i = 0; i < values.length; i++)
+			values[i] = SDDSValues.box(columnType, pages[page], i, enumDefinition, string_quotes);
 		return values;
 	}
 

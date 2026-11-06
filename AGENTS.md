@@ -36,3 +36,6 @@ This file contains a short tactical summary based on repository evidence. `../ll
 
 ## Human notes
 Add durable repo-specific instructions here.
+
+- Run `make test` after library changes and `make test-gui` after SDDSedit changes. The tests also check interchange with the C tools in `../SDDS/bin/Linux-x86_64`.
+- SDDS6 behavior follows `../SDDS/SDDSlib/doc/enums.md` and the C library. `tests/fixtures/enums` is a copy of `../SDDS/SDDSlib/testdata/enums`; refresh it when those fixtures change.

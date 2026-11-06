@@ -24,6 +24,7 @@ class sddsEditAttributesDialog extends JDialog {
     private String field_length = "0";
     private String fixed_value = null;
     private String group_name = null;
+    private String enum_values = null;
     private int type = 5;
     private int dimensions = 1;
     private int modetype = 1;
@@ -31,6 +32,11 @@ class sddsEditAttributesDialog extends JDialog {
     boolean attributes = false;
     final JTextField[] fields;
     final JRadioButton[] typeButtons;
+    /** The SDDS type of each button in typeButtons. */
+    private static final int[] TYPE_IDS = { SDDSUtil.SDDS_DOUBLE, SDDSUtil.SDDS_FLOAT, SDDSUtil.SDDS_LONG64,
+            SDDSUtil.SDDS_ULONG64, SDDSUtil.SDDS_LONG, SDDSUtil.SDDS_ULONG, SDDSUtil.SDDS_SHORT, SDDSUtil.SDDS_USHORT,
+            SDDSUtil.SDDS_STRING, SDDSUtil.SDDS_CHARACTER, SDDSUtil.SDDS_ENUM, SDDSUtil.SDDS_LONGDOUBLE };
+    private static final int ENUM_BUTTON = 10;
     final JLabel[] labels;
 
     public void setAttributesMode(int mode) {
@@ -38,7 +44,7 @@ class sddsEditAttributesDialog extends JDialog {
         // name = symbol = units = description = format_string = fixed_value = null;
         // field_length = "0";
         int i;
-        for (i = 0; i < 10; i++)
+        for (i = 0; i < typeButtons.length; i++)
             typeButtons[i].setEnabled(false);
         if (mode == 1) {
             setTitle("Parameter Info");
@@ -92,16 +98,42 @@ class sddsEditAttributesDialog extends JDialog {
     // fields[7].setText(String.valueOf(d));
     // }
     public void setType(int t) {
-        if ((t > 0) && (t < 11))
-            typeButtons[t - 1].setSelected(true);
-        else
-            typeButtons[8].setSelected(true);
+        int button = 8;
+        for (int i = 0; i < TYPE_IDS.length; i++) {
+            if (TYPE_IDS[i] == t)
+                button = i;
+        }
+        typeButtons[button].setSelected(true);
+        updateEnumFields();
+    }
+
+    public void setEnumValues(String values) {
+        fields[7].setText(values);
+    }
+
+    public String getEnumValues() {
+        if ((enum_values == null) || (enum_values.length() == 0))
+            return null;
+        return enum_values;
+    }
+
+    /** Enums have a dictionary, and have no format string or field length. */
+    private void updateEnumFields() {
+        boolean isEnum = typeButtons[ENUM_BUTTON].isSelected();
+        labels[8].setEnabled(isEnum);
+        fields[7].setEnabled(isEnum);
+        labels[4].setEnabled(!isEnum);
+        fields[4].setEnabled(!isEnum);
+        if (modetype != 1) {
+            labels[5].setEnabled(!isEnum);
+            fields[5].setEnabled(!isEnum);
+        }
     }
 
     public void setInsertMode(int mode) {
         attributes = false;
         int i;
-        for (i = 0; i < 10; i++)
+        for (i = 0; i < typeButtons.length; i++)
             typeButtons[i].setEnabled(true);
         if (mode == 1) {
             setTitle("New Parameter");
@@ -313,6 +345,19 @@ class sddsEditAttributesDialog extends JDialog {
              */
         }
 
+        labels[8] = new JLabel("enum values:", JLabel.LEFT);
+        labels[8].setForeground(Color.black);
+        gbc.weightx = 0.0;
+        gbc.gridwidth = 1;
+        gbl.setConstraints(labels[8], gbc);
+        panel1.add(labels[8]);
+        fields[7] = new JTextField(10);
+        fields[7].setToolTipText("code:label pairs, such as 0:OFF,10:ON,-1:FAULT");
+        gbc.weightx = 1.0;
+        gbc.gridwidth = GridBagConstraints.REMAINDER;
+        gbl.setConstraints(fields[7], gbc);
+        panel1.add(fields[7]);
+
         // labels[6] = new JLabel("type:", JLabel.LEFT);
         labels[6].setForeground(Color.black);
         gbc.weightx = 0.0;
@@ -320,7 +365,7 @@ class sddsEditAttributesDialog extends JDialog {
         gbl.setConstraints(labels[6], gbc);
         panel1.add(labels[6]);
 
-        typeButtons = new JRadioButton[10];
+        typeButtons = new JRadioButton[TYPE_IDS.length];
         typeButtons[0] = new JRadioButton("double");
         typeButtons[1] = new JRadioButton("float");
         typeButtons[2] = new JRadioButton("long64");
@@ -331,6 +376,8 @@ class sddsEditAttributesDialog extends JDialog {
         typeButtons[7] = new JRadioButton("ushort");
         typeButtons[8] = new JRadioButton("string");
         typeButtons[9] = new JRadioButton("character");
+        typeButtons[10] = new JRadioButton("enum");
+        typeButtons[11] = new JRadioButton("longdouble");
         ButtonGroup typeButtonGroup = new ButtonGroup();
         typeButtonGroup.add(typeButtons[6]);
         typeButtonGroup.add(typeButtons[7]);
@@ -342,7 +389,17 @@ class sddsEditAttributesDialog extends JDialog {
         typeButtonGroup.add(typeButtons[0]);
         typeButtonGroup.add(typeButtons[8]);
         typeButtonGroup.add(typeButtons[9]);
+        typeButtonGroup.add(typeButtons[10]);
+        typeButtonGroup.add(typeButtons[11]);
         typeButtons[8].setSelected(true);
+        ActionListener typeListener = new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                updateEnumFields();
+            }
+        };
+        for (int b = 0; b < typeButtons.length; b++)
+            typeButtons[b].addActionListener(typeListener);
+        updateEnumFields();
 
         gbc.weightx = 1.0;
         gbl.setConstraints(typeButtons[6], gbc);
@@ -363,9 +420,13 @@ class sddsEditAttributesDialog extends JDialog {
         panel1.add(typeButtons[0]);
         gbl.setConstraints(typeButtons[8], gbc);
         panel1.add(typeButtons[8]);
-        gbc.gridwidth = GridBagConstraints.REMAINDER;
         gbl.setConstraints(typeButtons[9], gbc);
         panel1.add(typeButtons[9]);
+        gbl.setConstraints(typeButtons[10], gbc);
+        panel1.add(typeButtons[10]);
+        gbc.gridwidth = GridBagConstraints.REMAINDER;
+        gbl.setConstraints(typeButtons[11], gbc);
+        panel1.add(typeButtons[11]);
 
         Object[] array = { panel1 };
 
@@ -428,14 +489,15 @@ class sddsEditAttributesDialog extends JDialog {
                         description = fields[3].getText();
                         format_string = fields[4].getText();
                         field_length = fixed_value = fields[5].getText();
+                        enum_values = fields[7].getText();
                         if (modetype == 3) {
                             group_name = fields[6].getText();
                             // dimensions = (Long.valueOf(fields[7].getText())).intValue();
                         }
                         int i;
-                        for (i = 0; i < 10; i++) {
+                        for (i = 0; i < typeButtons.length; i++) {
                             if (typeButtons[i].isSelected()) {
-                                type = i + 2;
+                                type = TYPE_IDS[i];
                                 break;
                             }
                         }

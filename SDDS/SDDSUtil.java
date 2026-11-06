@@ -35,8 +35,12 @@ public class SDDSUtil {
 	public final static int SDDS_USHORT = 9;
 	public final static int SDDS_STRING = 10;
 	public final static int SDDS_CHARACTER = 11;
-	public final static int SDDS_NUM_TYPES = 11;
-	public static String[] SDDS_type_name = new String[11];
+	public final static int SDDS_ENUM = 12;
+	public final static int SDDS_NUM_TYPES = 12;
+	/** The newest SDDS protocol version this library reads and writes. */
+	public final static int SDDS_VERSION = 6;
+	public static String[] SDDS_type_name = { "longdouble", "double", "float", "long64", "ulong64", "long", "ulong",
+			"short", "ushort", "string", "character", "enum" };
 
 	/**
 	 * Convert elements to long precision
@@ -55,68 +59,20 @@ public class SDDSUtil {
 	}
 
 	/**
-	 * Convert elements to float precision
-	 * 
+	 * Convert elements to long precision. Enums are categorical and are rejected;
+	 * see {@link #castArrayAsEnumCodes} to ask for their codes explicitly.
+	 *
 	 * @param array a numerical Object array
 	 * @return a long precision number array
 	 */
 	public static long[] castArrayAsLong(Object[] array, int type) {
-		int i, j;
-		long[] v;
-		i = Array.getLength(array);
-		v = new long[i];
-		switch (type) {
-			case SDDS_SHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (long) (((Short) array[j]).shortValue());
-				}
-				break;
-			case SDDS_USHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (long) (((Integer) array[j]).intValue());
-				}
-				break;
-			case SDDS_LONG:
-				for (j = 0; j < i; j++) {
-					v[j] = ((Long) array[j]).longValue();
-				}
-				break;
-			case SDDS_ULONG:
-				for (j = 0; j < i; j++) {
-					v[j] = ((Long) array[j]).longValue();
-				}
-				break;
-			case SDDS_LONG64:
-				for (j = 0; j < i; j++) {
-					v[j] = ((Long) array[j]).longValue();
-				}
-				break;
-			case SDDS_ULONG64:
-				/*
-				 * ULong type does not exists in java. This could result in invalid data for
-				 * huge numbers
-				 */
-				for (j = 0; j < i; j++) {
-					v[j] = ((Long) array[j]).longValue();
-				}
-				break;
-			case SDDS_FLOAT:
-				for (j = 0; j < i; j++) {
-					v[j] = (long) (((Float) array[j]).floatValue());
-				}
-				break;
-			case SDDS_DOUBLE:
-				for (j = 0; j < i; j++) {
-					v[j] = (long) (((Double) array[j]).doubleValue());
-				}
-				break;
-			case SDDS_LONGDOUBLE:
-				System.err.println("error: longdouble not supported in SDDSJava (SDDSUtil.castArrayAsLong)");
-				return null;
-			default:
-				System.err.println("error: unable to create float array from Object array (SDDSUtil.castArrayAsLong)");
-				return null;
+		if (!isNumericType(type)) {
+			System.err.println("error: unable to create long array from Object array (SDDSUtil.castArrayAsLong)");
+			return null;
 		}
+		long[] v = new long[array.length];
+		for (int j = 0; j < array.length; j++)
+			v[j] = ((Number) array[j]).longValue();
 		return v;
 	}
 
@@ -137,68 +93,19 @@ public class SDDSUtil {
 	}
 
 	/**
-	 * Convert elements to float precision
-	 * 
+	 * Convert elements to float precision. Enums are categorical and are rejected.
+	 *
 	 * @param array a numerical Object array
 	 * @return a float precision number array
 	 */
 	public static float[] castArrayAsFloat(Object[] array, int type) {
-		int i, j;
-		float[] v;
-		i = Array.getLength(array);
-		v = new float[i];
-		switch (type) {
-			case SDDS_SHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Short) array[j]).shortValue());
-				}
-				break;
-			case SDDS_USHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Integer) array[j]).intValue());
-				}
-				break;
-			case SDDS_LONG:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_ULONG:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_LONG64:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_ULONG64:
-				/*
-				 * ULong type does not exists in java. This could result in invalid data for
-				 * huge numbers
-				 */
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_FLOAT:
-				for (j = 0; j < i; j++) {
-					v[j] = ((Float) array[j]).floatValue();
-				}
-				break;
-			case SDDS_DOUBLE:
-				for (j = 0; j < i; j++) {
-					v[j] = (float) (((Double) array[j]).doubleValue());
-				}
-				break;
-			case SDDS_LONGDOUBLE:
-				System.err.println("error: longdouble not supported in SDDSJava (SDDSUtil.castArrayAsFloat)");
-				return null;
-			default:
-				System.err.println("error: unable to create float array from Object array (SDDSUtil.castArrayAsFloat)");
-				return null;
+		if (!isNumericType(type)) {
+			System.err.println("error: unable to create float array from Object array (SDDSUtil.castArrayAsFloat)");
+			return null;
 		}
+		float[] v = new float[array.length];
+		for (int j = 0; j < array.length; j++)
+			v[j] = ((Number) array[j]).floatValue();
 		return v;
 	}
 
@@ -219,68 +126,63 @@ public class SDDSUtil {
 	}
 
 	/**
-	 * Convert elements to double precision
-	 * 
+	 * Convert elements to double precision. Enums are categorical and are rejected.
+	 *
 	 * @param array a numerical Object array
 	 * @return a double precision number array
 	 */
 	public static double[] castArrayAsDouble(Object[] array, int type) {
-		int i, j;
-		double[] v;
-		i = Array.getLength(array);
-		v = new double[i];
-		switch (type) {
-			case SDDS_SHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Short) array[j]).shortValue());
-				}
-				break;
-			case SDDS_USHORT:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Integer) array[j]).intValue());
-				}
-				break;
-			case SDDS_LONG:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_ULONG:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_LONG64:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_ULONG64:
-				/*
-				 * ULong type does not exists in java. This could result in invalid data for
-				 * huge numbers
-				 */
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Long) array[j]).longValue());
-				}
-				break;
-			case SDDS_FLOAT:
-				for (j = 0; j < i; j++) {
-					v[j] = (double) (((Float) array[j]).floatValue());
-				}
-				break;
-			case SDDS_DOUBLE:
-				for (j = 0; j < i; j++) {
-					v[j] = ((Double) array[j]).doubleValue();
-				}
-				break;
-			case SDDS_LONGDOUBLE:
-				System.err.println("error: longdouble not supported in SDDSJava (SDDSUtil.castArrayAsDouble)");
-				return null;
-			default:
-				System.err
-						.println("error: unable to create double array from Object array (SDDSUtil.castArrayAsDouble)");
-				return null;
+		if (!isNumericType(type)) {
+			System.err.println("error: unable to create double array from Object array (SDDSUtil.castArrayAsDouble)");
+			return null;
+		}
+		double[] v = new double[array.length];
+		for (int j = 0; j < array.length; j++)
+			v[j] = ((Number) array[j]).doubleValue();
+		return v;
+	}
+
+	/**
+	 * Convert numerical elements to exact long doubles
+	 *
+	 * @param array an Object array holding numbers or SDDSLongDouble objects
+	 * @return a long double array
+	 */
+	public static SDDSLongDouble[] castArrayAsLongDouble(Object[] array) {
+		SDDSLongDouble[] v = new SDDSLongDouble[array.length];
+		for (int j = 0; j < array.length; j++) {
+			if (array[j] instanceof SDDSLongDouble)
+				v[j] = (SDDSLongDouble) array[j];
+			else if ((array[j] instanceof Long) || (array[j] instanceof Integer) || (array[j] instanceof Short))
+				v[j] = SDDSLongDouble.valueOf(((Number) array[j]).longValue());
+			else
+				v[j] = SDDSLongDouble.valueOf(((Number) array[j]).doubleValue());
+		}
+		return v;
+	}
+
+	/**
+	 * Explicitly get enum codes from values. This is the one cast that accepts enum
+	 * values, and the codes it gives are not measurements.
+	 *
+	 * @param array an Object array holding SDDSEnumValue objects, integers or complete
+	 *              decimal codes as strings
+	 * @return the codes
+	 * @throws IllegalArgumentException if an element is not a code
+	 */
+	public static long[] castArrayAsEnumCodes(Object[] array) {
+		long[] v = new long[array.length];
+		for (int j = 0; j < array.length; j++) {
+			if (array[j] instanceof SDDSEnumValue) {
+				v[j] = ((SDDSEnumValue) array[j]).getCode();
+			} else if ((array[j] instanceof Integer) || (array[j] instanceof Long) || (array[j] instanceof Short)) {
+				v[j] = ((Number) array[j]).longValue();
+			} else {
+				Integer code = array[j] instanceof String ? SDDSEnumDefinition.parseCode((String) array[j]) : null;
+				if (code == null)
+					throw new IllegalArgumentException("Invalid enum code at value " + j);
+				v[j] = code.intValue();
+			}
 		}
 		return v;
 	}
@@ -366,51 +268,120 @@ public class SDDSUtil {
 	}
 
 	/**
-	 * Verify that format string is valid.
-	 * 
+	 * Verify that format string is valid, by the same rules as the C library. Enums
+	 * take no format string, so none is valid for them.
+	 *
 	 * @param s    format string
 	 * @param type valid data type
 	 * @return <code>true</code> if valid
 	 *         <code>false</code> if not valid
 	 */
 	public static boolean verifyPrintfFormat(String s, int type) {
-		/*
-		 * Parameters p = new Parameters();
-		 * try {
-		 * switch(type) {
-		 * case SDDS_SHORT:
-		 * case SDDS_LONG:
-		 * case SDDS_FLOAT:
-		 * case SDDS_DOUBLE:
-		 * if (Format.sprintf(s, p.add(1)) == null)
-		 * return false;
-		 * break;
-		 * case SDDS_STRING:
-		 * if (Format.sprintf(s, p.add("test")) == null)
-		 * return false;
-		 * break;
-		 * case SDDS_CHARACTER:
-		 * if (Format.sprintf(s, p.add('t')) == null)
-		 * return false;
-		 * break;
-		 * default:
-		 * return false;
-		 * }
-		 * return true;
-		 * } catch (Exception e) {
-		 * return false;
-		 * }
-		 */
-		return true;
+		if (s == null)
+			return false;
+		if ((type == SDDS_STRING) && verifyStringFormat(s))
+			return true;
+		int percent = -1;
+		int from = 0;
+		while (true) {
+			percent = s.indexOf('%', from);
+			if ((percent < 0) || (percent + 1 >= s.length()) || (s.charAt(percent + 1) != '%'))
+				break;
+			from = percent + 1;
+		}
+		if ((percent < 0) || (percent + 1 >= s.length()))
+			return false;
+		String f = s.substring(percent + 1);
+		int len;
+		switch (type) {
+			case SDDS_LONGDOUBLE:
+			case SDDS_DOUBLE:
+			case SDDS_FLOAT:
+				len = firstOf(f, "fegEG");
+				if (len == f.length())
+					return false;
+				return (len == 0) || (spanOf(f, "-+.0123456789 ") >= len);
+			case SDDS_LONG:
+			case SDDS_LONG64:
+				len = firstOf(f, "d");
+				if (len == f.length())
+					return false;
+				return (len == 1) || (spanOf(f, "-+.0123456789 ") >= len - 1);
+			case SDDS_ULONG:
+			case SDDS_ULONG64:
+				len = firstOf(f, "u");
+				if (len == f.length())
+					return false;
+				return (len == 1) || (spanOf(f, "-+.0123456789 ") >= len - 1);
+			case SDDS_SHORT:
+				len = firstOf(f, "d");
+				if ((len == f.length()) || (len == 0) || (f.charAt(len - 1) != 'h'))
+					return false;
+				return (len == 1) || (spanOf(f, "-+.0123456789 ") >= len - 1);
+			case SDDS_USHORT:
+				len = firstOf(f, "u");
+				if ((len == f.length()) || (len == 0) || (f.charAt(len - 1) != 'h'))
+					return false;
+				return (len == 1) || (spanOf(f, "-+.0123456789 ") >= len - 1);
+			case SDDS_STRING:
+				len = firstOf(f, "s");
+				if (len == f.length())
+					return false;
+				return (len == 0) || (spanOf(f, "-0123456789") >= len);
+			case SDDS_CHARACTER:
+				return firstOf(f, "c") == 0;
+			default:
+				return false;
+		}
+	}
+
+	private static int firstOf(String s, String characters) {
+		for (int i = 0; i < s.length(); i++)
+			if (characters.indexOf(s.charAt(i)) >= 0)
+				return i;
+		return s.length();
+	}
+
+	private static int spanOf(String s, String characters) {
+		for (int i = 0; i < s.length(); i++)
+			if (characters.indexOf(s.charAt(i)) < 0)
+				return i;
+		return s.length();
+	}
+
+	private static boolean verifyStringFormat(String format) {
+		int conversions = 0;
+		int i = 0, n = format.length();
+		while (i < n) {
+			if (format.charAt(i++) != '%')
+				continue;
+			if ((i < n) && (format.charAt(i) == '%')) {
+				i++;
+				continue;
+			}
+			if ((i < n) && (format.charAt(i) == '-'))
+				i++;
+			while ((i < n) && Character.isDigit(format.charAt(i)))
+				i++;
+			if ((i < n) && (format.charAt(i) == '.')) {
+				i++;
+				while ((i < n) && Character.isDigit(format.charAt(i)))
+					i++;
+			}
+			if ((i >= n) || (format.charAt(i) != 's') || (conversions++ > 0))
+				return false;
+			i++;
+		}
+		return conversions == 1;
 	}
 
 	/**
 	 * Determine if string is a valid name.
 	 *
 	 * @param name name to be tested for validity, the first
-	 *             character should be a letter or <code>.:</code>
+	 *             character should be an ASCII letter or <code>.:</code>
 	 *             every other character of the name should be
-	 *             a letter, digit, or one of the following:
+	 *             an ASCII letter, digit, or one of the following:
 	 *             <code>{@literal @}:#+%-._${@literal &}/[]</code>
 	 * @return <code>true</code> if valid<br>
 	 *         <code>false</code> if invalid<br>
@@ -420,22 +391,38 @@ public class SDDSUtil {
 		int i, j;
 		String validChars = "@:#+%-._$&/[]";
 		String startChars = ".:";
+		if (name == null)
+			return false;
 		i = name.length();
 		if (i == 0)
 			return false;
 		c = name.charAt(0);
-		if (!Character.isLetter(c)) {
+		if (!isAsciiLetter(c)) {
 			if (startChars.indexOf(c) == -1)
 				return false;
 		}
 		for (j = 1; j < i; j++) {
 			c = name.charAt(j);
-			if (!Character.isLetterOrDigit(c)) {
+			if (!isAsciiLetter(c) && ((c < '0') || (c > '9'))) {
 				if (validChars.indexOf(c) == -1)
 					return false;
 			}
 		}
 		return true;
+	}
+
+	private static boolean isAsciiLetter(char c) {
+		return ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z'));
+	}
+
+	/**
+	 * Determine if data type is numeric. Enums are categorical and are not.
+	 *
+	 * @param type data type
+	 * @return <code>true</code> for integer and floating point types
+	 */
+	public static boolean isNumericType(int type) {
+		return (type >= SDDS_LONGDOUBLE) && (type <= SDDS_USHORT);
 	}
 
 	/**
@@ -454,6 +441,7 @@ public class SDDSUtil {
 	 *             <li><code>9</code> for ushort</li>
 	 *             <li><code>10</code> for string</li>
 	 *             <li><code>11</code> for character</li>
+	 *             <li><code>12</code> for enum</li>
 	 *             </ul>
 	 * @return <code>true</code> if valid<br>
 	 *         <code>false</code> if invalid<br>
@@ -481,30 +469,19 @@ public class SDDSUtil {
 	 *             <li><code>9</code> for ushort</li>
 	 *             <li><code>10</code> for string</li>
 	 *             <li><code>11</code> for character</li>
+	 *             <li><code>12</code> for enum</li>
 	 *             </ul>
 	 * @return type name if valid<br>
 	 *         <code>null</code> if invalid<br>
 	 */
 	public static String getTypeName(int type) {
-		SDDS_type_name[0] = "longdouble";
-		SDDS_type_name[1] = "double";
-		SDDS_type_name[2] = "float";
-		SDDS_type_name[3] = "long64";
-		SDDS_type_name[4] = "ulong64";
-		SDDS_type_name[5] = "long";
-		SDDS_type_name[6] = "ulong";
-		SDDS_type_name[7] = "short";
-		SDDS_type_name[8] = "ushort";
-		SDDS_type_name[9] = "string";
-		SDDS_type_name[10] = "character";
-
 		if (!isValidType(type))
 			return null;
 		return SDDS_type_name[type - 1];
 	}
 
 	/**
-	 * Get integer data type value from data type name.
+	 * Get integer data type value from data type name, ignoring case.
 	 *
 	 * @param typeName valid values are:
 	 *                 <ul>
@@ -512,34 +489,36 @@ public class SDDSUtil {
 	 *                 <li><code>"double"</code></li>
 	 *                 <li><code>"float"</code></li>
 	 *                 <li><code>"long64"</code></li>
-	 *                 <li><code>"ulong6"</code></li>
+	 *                 <li><code>"ulong64"</code></li>
 	 *                 <li><code>"long"</code></li>
 	 *                 <li><code>"ulong"</code></li>
 	 *                 <li><code>"short"</code></li>
 	 *                 <li><code>"ushort"</code></li>
 	 *                 <li><code>"string"</code></li>
 	 *                 <li><code>"character"</code></li>
+	 *                 <li><code>"enum"</code></li>
 	 *                 </ul>
 	 * @return <code>int</code> type if valid<br>
 	 *         <code>0</code> if invalid<br>
 	 */
 	public static int identifyType(String typeName) {
-		int i;
-		SDDS_type_name[0] = "longdouble";
-		SDDS_type_name[1] = "double";
-		SDDS_type_name[2] = "float";
-		SDDS_type_name[3] = "long64";
-		SDDS_type_name[4] = "ulong64";
-		SDDS_type_name[5] = "long";
-		SDDS_type_name[6] = "ulong";
-		SDDS_type_name[7] = "short";
-		SDDS_type_name[8] = "ushort";
-		SDDS_type_name[9] = "string";
-		SDDS_type_name[10] = "character";
-		for (i = 0; 1 < SDDS_NUM_TYPES; i++) {
-			if (typeName.toLowerCase().equals(SDDS_type_name[i]))
+		return typeName == null ? 0 : identifyTypeExactly(typeName.toLowerCase());
+	}
+
+	/**
+	 * Get integer data type value from a data type name as spelled in a file header,
+	 * which is case sensitive.
+	 *
+	 * @param typeName type name
+	 * @return <code>int</code> type if valid<br>
+	 *         <code>0</code> if invalid<br>
+	 */
+	public static int identifyTypeExactly(String typeName) {
+		for (int i = 0; i < SDDS_NUM_TYPES; i++) {
+			if (SDDS_type_name[i].equals(typeName))
 				return i + 1;
 		}
+		return 0;
 	}
 
 	/**

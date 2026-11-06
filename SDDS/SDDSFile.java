@@ -11,9 +11,11 @@ package SDDS.java.SDDS;
 
 import java.io.*;
 import java.lang.reflect.*;
-import java.util.StringTokenizer;
 import java.util.zip.*;
 import java.net.*;
+import java.nio.ByteOrder;
+import java.util.Arrays;
+import java.util.Map;
 
 /**
  * The SDDS File object is used to read and write Self Describing
@@ -64,27 +66,37 @@ public class SDDSFile {
     final int SDDS_USHORT = 9;
     final int SDDS_STRING = 10;
     final int SDDS_CHARACTER = 11;
+    final int SDDS_ENUM = 12;
     public boolean asciiFile;
     public boolean noRowCount;
     public boolean bigEndian;
     public boolean columnMajorOrder;
     public int layoutVersion;
     public boolean isURL = false, isIS = false;
+    int linesPerRow = 1;
+    int additionalHeaderLines = 0;
+    boolean fixedRowCount = false;
+    private int minimumVersion = 1;
+    private boolean layoutWritten = false;
+    private boolean definingEnum = false;
+    private boolean dataCommandSeen = false;
+    private boolean bigEndianComment = false;
+    private boolean littleEndianComment = false;
+    private boolean fixedRowCountComment = false;
+    private boolean pagesEnded = false;
+    private boolean endianSet = false;
+    private final static int INCLUDE_DEPTH_LIMIT = 64;
+    private final static int ARRAY_SIZE_LIMIT = Integer.MAX_VALUE - 8;
 
     /**
      * Create a new SDDS file that can be used to read and write SDDS files.
      */
     public SDDSFile() {
-        String os = System.getProperty("os.name");
         n_errors = 0;
         asciiFile = true;
         noRowCount = false;
         columnMajorOrder = false;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -93,17 +105,12 @@ public class SDDSFile {
      * @param filename file name to read or write data
      */
     public SDDSFile(String filename) {
-        String os = System.getProperty("os.name");
         fileName = filename;
         n_errors = 0;
         asciiFile = true;
         noRowCount = false;
         columnMajorOrder = false;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -112,7 +119,6 @@ public class SDDSFile {
      * @param is0 InputStream object to read from
      */
     public SDDSFile(InputStream is0) {
-        String os = System.getProperty("os.name");
         fileName = null;
         is = is0;
         isIS = true;
@@ -120,11 +126,7 @@ public class SDDSFile {
         asciiFile = true;
         noRowCount = false;
         columnMajorOrder = false;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -133,7 +135,6 @@ public class SDDSFile {
      * @param filename file name to read or write data
      */
     public SDDSFile(URL filename) {
-        String os = System.getProperty("os.name");
         fileName = filename.getFile();
         URLName = filename;
         n_errors = 0;
@@ -141,11 +142,7 @@ public class SDDSFile {
         noRowCount = false;
         columnMajorOrder = false;
         isURL = true;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -155,16 +152,11 @@ public class SDDSFile {
      *               output
      */
     public SDDSFile(boolean binary) {
-        String os = System.getProperty("os.name");
         n_errors = 0;
         asciiFile = !binary;
         noRowCount = false;
         columnMajorOrder = false;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -175,17 +167,12 @@ public class SDDSFile {
      *                 ascii output
      */
     public SDDSFile(String filename, boolean binary) {
-        String os = System.getProperty("os.name");
         fileName = filename;
         n_errors = 0;
         asciiFile = !binary;
         noRowCount = false;
         columnMajorOrder = false;
-        if (os.equals("Linux") || os.startsWith("Windows")) {
-            bigEndian = false;
-        } else {
-            bigEndian = true;
-        }
+        bigEndian = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
     }
 
     /**
@@ -220,6 +207,7 @@ public class SDDSFile {
      */
     public void setEndian(boolean little_endian) {
         bigEndian = !little_endian;
+        endianSet = true;
     }
 
     /**
@@ -265,7 +253,7 @@ public class SDDSFile {
         int rowCount;
         for (int page = 1; page <= pageCount(); page++) {
             rowCount = getRowCount(page);
-            for (int row = 1; row <= rowCount; row++) {
+            for (int row = rowCount; row >= 1; row--) {
                 deleteRow(page, row);
             }
         }
@@ -290,280 +278,54 @@ public class SDDSFile {
      *         <code>false</code> if error occurs
      */
     public boolean duplicateCopy(SDDSFile file, boolean parameters, boolean arrays, boolean columns) {
-        Object object;
-        Object objects[];
-        int type, pcount, size;
-        long v;
-        // parameters
+        int index;
         for (int i = 0; parameters && i < file.parameterCount; i++) {
-            type = file.parameterObject[i].getType();
-            pcount = file.parameterObject[i].getPageCount();
-            if (defineParameter(file.parameterObject[i].getName(), file.parameterObject[i].getSymbol(),
-                    file.parameterObject[i].getUnits(), file.parameterObject[i].getDescription(),
-                    file.parameterObject[i].getFormat_String(), type,
-                    file.parameterObject[i].getFixed_Value()) == -1)
+            SDDSParameter source = file.parameterObject[i];
+            if (source.getType() == SDDS_ENUM)
+                index = defineEnumParameter(source.getName(), source.getSymbol(), source.getUnits(),
+                        source.getDescription(), null, source.getEnumValues(), source.getFixed_Value());
+            else
+                index = defineParameter(source.getName(), source.getSymbol(), source.getUnits(),
+                        source.getDescription(), source.getFormat_String(), source.getType(), source.getFixed_Value());
+            if (index == -1)
                 return false;
-            for (int page = 1; page <= pcount; page++) {
-                object = file.parameterObject[i].getValue(page, false);
-                switch (type) {
-                    case SDDS_LONGDOUBLE:
-                        setError("error: longdouble not supported in SDDSJava");
-                        return false;
-                    case SDDS_DOUBLE:
-                        if (!setParameter(i, ((Double) object).doubleValue(), page))
-                            return false;
-                        break;
-                    case SDDS_FLOAT:
-                        if (!setParameter(i, ((Float) object).floatValue(), page))
-                            return false;
-                        break;
-                    case SDDS_LONG64:
-                        if (!setParameter(i, ((Long) object).longValue(), page))
-                            return false;
-                        break;
-                    case SDDS_ULONG64:
-                        /*
-                         * ULong type does not exists in java. This could result in invalid data for
-                         * huge numbers
-                         */
-                        v = ((Long) object).longValue();
-                        if (v < 0)
-                            v = 0;
-                        if (!setParameter(i, v, page))
-                            return false;
-                        break;
-                    case SDDS_LONG:
-                        if (!setParameter(i, ((Long) object).longValue(), page))
-                            return false;
-                        break;
-                    case SDDS_ULONG:
-                        if (!setParameter(i, (long) (((Long) object).longValue() & 0xffffffffL), page))
-                            return false;
-                        break;
-                    case SDDS_SHORT:
-                        if (!setParameter(i, ((Short) object).shortValue(), page))
-                            return false;
-                        break;
-                    case SDDS_USHORT:
-                        if (!setParameter(i, (int) (((Integer) object).intValue() & 0xffff), page))
-                            return false;
-                        break;
-                    case SDDS_STRING:
-                    case SDDS_CHARACTER:
-                        if (!setParameter(i, object.toString(), page))
-                            return false;
-                        break;
-                }
-            }
+            parameterObject[index].copyValues(source);
         }
-
-        // arrays
         for (int i = 0; arrays && i < file.arrayCount; i++) {
-            type = file.arrayObject[i].getType();
-            pcount = file.arrayObject[i].getPageCount();
-            if (defineArray(file.arrayObject[i].getName(), file.arrayObject[i].getSymbol(),
-                    file.arrayObject[i].getUnits(), file.arrayObject[i].getDescription(),
-                    file.arrayObject[i].getFormat_String(), file.arrayObject[i].getGroup_Name(),
-                    file.arrayObject[i].getType(), 0, file.arrayObject[i].getDimensions()) == -1)
+            SDDSArray source = file.arrayObject[i];
+            if (source.getType() == SDDS_ENUM)
+                index = defineEnumArray(source.getName(), source.getSymbol(), source.getUnits(),
+                        source.getDescription(), null, source.getGroup_Name(), source.getEnumValues(), 0,
+                        source.getDimensions());
+            else
+                index = defineArray(source.getName(), source.getSymbol(), source.getUnits(), source.getDescription(),
+                        source.getFormat_String(), source.getGroup_Name(), source.getType(), 0,
+                        source.getDimensions());
+            if (index == -1)
                 return false;
-            for (int page = 1; page <= pcount; page++) {
-                setArrayDim(page, i, file.arrayObject[i].getDim(page));
-                objects = file.arrayObject[i].getValues(page, false);
-                size = Array.getLength(objects);
-                switch (type) {
-                    case SDDS_LONGDOUBLE:
-                        setError("error: longdouble not supported in SDDSJava");
-                        return false;
-                    case SDDS_DOUBLE: {
-                        double[] values = new double[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Double) objects[j]).doubleValue();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_FLOAT: {
-                        float[] values = new float[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Float) objects[j]).floatValue();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_LONG64: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Long) objects[j]).longValue();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_ULONG64: {
-                        /*
-                         * ULong type does not exists in java. This could result in invalid data for
-                         * huge numbers
-                         */
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++) {
-                            values[j] = ((Long) objects[j]).longValue();
-                            if (values[j] < 0)
-                                values[j] = 0;
-                        }
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_LONG: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Long) objects[j]).longValue();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_ULONG: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = (long) (((Long) objects[j]).longValue() & 0xffffffffL);
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_SHORT: {
-                        short[] values = new short[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Short) objects[j]).shortValue();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_USHORT: {
-                        int[] values = new int[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = (int) (((Integer) objects[j]).intValue() & 0xffff);
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_STRING:
-                    case SDDS_CHARACTER: {
-                        String[] values = new String[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = objects[j].toString();
-                        if (!setArray(i, values, page))
-                            return false;
-                        break;
-                    }
-                }
-            }
+            arrayObject[index].copyValues(source);
         }
-
-        // columns
         for (int i = 0; columns && i < file.columnCount; i++) {
-            type = file.columnObject[i].getType();
-            pcount = file.columnObject[i].getPageCount();
-            if (defineColumn(file.columnObject[i].getName(), file.columnObject[i].getSymbol(),
-                    file.columnObject[i].getUnits(), file.columnObject[i].getDescription(),
-                    file.columnObject[i].getFormat_String(), file.columnObject[i].getType(),
-                    file.columnObject[i].getField_Length()) == -1)
+            SDDSColumn source = file.columnObject[i];
+            if (source.getType() == SDDS_ENUM)
+                index = defineEnumColumn(source.getName(), source.getSymbol(), source.getUnits(),
+                        source.getDescription(), null, source.getEnumValues(), 0);
+            else
+                index = defineColumn(source.getName(), source.getSymbol(), source.getUnits(),
+                        source.getDescription(), source.getFormat_String(), source.getType(),
+                        source.getField_Length());
+            if (index == -1)
                 return false;
-            for (int page = 1; page <= pcount; page++) {
-                objects = file.columnObject[i].getValues(page, false);
-                size = Array.getLength(objects);
-                switch (type) {
-                    case SDDS_LONGDOUBLE:
-                        setError("error: longdouble not supported in SDDSJava");
-                        return false;
-                    case SDDS_DOUBLE: {
-                        double[] values = new double[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Double) objects[j]).doubleValue();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_FLOAT: {
-                        float[] values = new float[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Float) objects[j]).floatValue();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_LONG64: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Long) objects[j]).longValue();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_ULONG64: {
-                        /*
-                         * ULong type does not exists in java. This could result in invalid data for
-                         * huge numbers
-                         */
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++) {
-                            values[j] = ((Long) objects[j]).longValue();
-                            if (values[j] < 0)
-                                values[j] = 0;
-                        }
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_LONG: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Long) objects[j]).longValue();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_ULONG: {
-                        long[] values = new long[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = (long) (((Long) objects[j]).longValue() & 0xffffffffL);
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_SHORT: {
-                        short[] values = new short[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = ((Short) objects[j]).shortValue();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_USHORT: {
-                        int[] values = new int[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = (int) (((Integer) objects[j]).intValue() & 0xffff);
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                    case SDDS_STRING:
-                    case SDDS_CHARACTER: {
-                        String[] values = new String[size];
-                        for (int j = 0; j < size; j++)
-                            values[j] = objects[j].toString();
-                        if (!setColumn(i, values, page))
-                            return false;
-                        break;
-                    }
-                }
-            }
+            columnObject[index].copyValues(source);
         }
-
         return true;
     }
 
     /**
-     * Open a file for writting.
-     * 
+     * Open a file for writting. A file name ending in <code>.gz</code> is written with
+     * gzip compression, and one ending in <code>.xz</code> or <code>.lzma</code> with
+     * XZ compression, as the C library does.
+     *
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if error occurs
      */
@@ -587,24 +349,40 @@ public class SDDSFile {
                     setError("unable to open file in gzip format (openOutputFile)");
                     return false;
                 }
-                dos = new DataOutputStream(gzos);
-                ledos = new LEDataOutputStream(gzos);
+                bos = new BufferedOutputStream(gzos, 4096 /* buffsize */);
+            } else if (fileName.endsWith(".xz") || fileName.endsWith(".lzma")) {
+                try {
+                    bos = new BufferedOutputStream(SDDSXZ.openOutput(fos), 65536 /* buffsize */);
+                } catch (Exception e) {
+                    setError("unable to open file in xz format (openOutputFile)");
+                    return false;
+                }
             } else {
                 bos = new BufferedOutputStream(fos, 4096 /* buffsize */);
-                dos = new DataOutputStream(bos);
-                ledos = new LEDataOutputStream(bos);
             }
+            dos = new DataOutputStream(bos);
+            ledos = new LEDataOutputStream(bos);
         }
         return true;
     }
 
     /**
-     * Write out the SDDS file
+     * Write out the SDDS file. Every page is checked before the output file is opened,
+     * so a value that cannot be written leaves an existing file alone. A file with no
+     * row counts stays open for {@link #writeRow} if it is plain ascii. Rows cannot be
+     * added to binary or compressed files, so those are always closed here.
      *
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if an error occurs
      */
     public boolean writeFile() {
+        if (!validateEnumLayout())
+            return false;
+        int pages = pageCount();
+        for (int page = 1; page <= pages; page++) {
+            if (!preparePage(page))
+                return false;
+        }
         if (!openOutputFile()) {
             return false;
         }
@@ -616,7 +394,9 @@ public class SDDSFile {
             closeOutput();
             return false;
         }
-        if (!noRowCount) {
+        boolean compressed = (fileName != null)
+                && (fileName.endsWith(".gz") || fileName.endsWith(".xz") || fileName.endsWith(".lzma"));
+        if (!noRowCount || !asciiFile || compressed) {
             if (!closeOutput()) {
                 return false;
             }
@@ -655,16 +435,17 @@ public class SDDSFile {
     }
 
     /**
-     * Open SDDS input file
+     * Open SDDS input file. A file name ending in <code>.gz</code> is read with gzip
+     * decompression. One ending in <code>.xz</code> or <code>.lzma</code> is read as
+     * either an XZ or a legacy LZMA stream, whichever it holds.
      *
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if an error occurs
      */
     public boolean openInputFile() {
+        InputStream source;
         if (is == null && fileName == null) {
-            bis = new BufferedInputStream(System.in, 4096 /* buffsize */);
-            dis = new DataInputStream(bis);
-            ledis = new LEDataInputStream(bis);
+            source = System.in;
         } else {
             if (is == null) {
                 try {
@@ -679,432 +460,479 @@ public class SDDSFile {
                     return false;
                 }
             }
+            source = (isURL || isIS) ? is : fis;
             if (fileName != null && fileName.endsWith(".gz")) {
                 try {
-                    if (isURL) {
-                        gzis = new GZIPInputStream(is, 4096 /* buffsize */);
-                    } else {
-                        gzis = new GZIPInputStream(fis, 4096 /* buffsize */);
+                    /* As with gzopen, a file with this name need not actually be compressed. */
+                    BufferedInputStream peek = new BufferedInputStream(source, 65536 /* buffsize */);
+                    peek.mark(2);
+                    boolean gzipped = (peek.read() == 0x1f) && (peek.read() == 0x8b);
+                    peek.reset();
+                    source = peek;
+                    if (gzipped) {
+                        gzis = new GZIPInputStream(peek, 4096 /* buffsize */);
+                        source = gzis;
                     }
                 } catch (Exception e) {
                     setError("input file has an invalid gzip format (openInputFile)");
                     return false;
                 }
-                dis = new DataInputStream(gzis);
-                ledis = new LEDataInputStream(gzis);
-            } else {
-                if (isURL || isIS) {
-                    bis = new BufferedInputStream(is, 4096 /* buffsize */);
-                } else {
-                    bis = new BufferedInputStream(fis, 4096 /* buffsize */);
+            } else if (fileName != null && (fileName.endsWith(".xz") || fileName.endsWith(".lzma"))) {
+                try {
+                    source = SDDSXZ.openInput(source);
+                } catch (Exception e) {
+                    setError("input file has an invalid xz format (openInputFile)");
+                    return false;
                 }
-                dis = new DataInputStream(bis);
-                ledis = new LEDataInputStream(bis);
             }
         }
+        bis = new BufferedInputStream(source, 65536 /* buffsize */);
+        dis = new DataInputStream(bis);
+        ledis = new LEDataInputStream(bis);
         return true;
     }
 
     /**
-     * Parse SDDS input file header lines
+     * Parse SDDS input file header lines. SDDS6 files use the bounded SDDS6 grammar;
+     * SDDS1 to SDDS5 files use the legacy grammar and cannot declare enums.
      *
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if an error occurs
      */
     public boolean parseHeaders() {
-        StreamTokenizer st;
-        StringReader sr;
-        final int quoteChar = 34;
-        int header = 0;
-        String name, symbol, units, description, format_string, group_name, fixed_value;
-        int type, field_length, dimensions;
-        String token, line;
-        int c;
-
         arrayCount = parameterCount = columnCount = 0;
-        name = symbol = units = description = format_string = group_name = fixed_value = null;
-        type = field_length = dimensions = 0;
-
+        descriptionText = descriptionContents = null;
+        noRowCount = false;
+        columnMajorOrder = false;
+        linesPerRow = 1;
+        additionalHeaderLines = 0;
+        fixedRowCount = false;
+        dataCommandSeen = false;
+        bigEndianComment = littleEndianComment = fixedRowCountComment = false;
         try {
-            try {
-                sr = new StringReader(dis.readLine());
-            } catch (Exception e) {
+            String first = SDDSText.readRawLine(dis);
+            if (first == null) {
                 setError("unable to read header lines (parseHeaders)");
                 return false;
             }
-            st = new StreamTokenizer(sr);
-            st.resetSyntax();
-            st.whitespaceChars('\u0000', '\u0020');
-            st.commentChar('!');
-            st.quoteChar(34);
-            st.wordChars(35, 255);
-            st.whitespaceChars('=', '=');
-            st.whitespaceChars(',', ',');
-            st.eolIsSignificant(false);
-            st.lowerCaseMode(false);
-
-            c = st.nextToken();
-            if (c != StreamTokenizer.TT_WORD) {
-                setError("Missing SDDS version number (parseHeaders)");
-                return false;
-            }
-            token = st.sval;
-            if (!SDDSUtil.strncmp(token, "SDDS", 4)) {
+            if (!first.startsWith("SDDS")) {
                 setError("Missing SDDS version number (parseHeaders)");
                 return false;
             }
             try {
-                layoutVersion = (Integer.valueOf(SDDSUtil.strchop(token, 4))).intValue();
+                layoutVersion = (int) SDDSText.scanLong(first.substring(4));
             } catch (NumberFormatException e) {
-                setError("unsupported SDDS file version (parseHeaders)");
+                setError("Missing SDDS version number (parseHeaders)");
                 return false;
             }
-            if ((layoutVersion != 1) && (layoutVersion != 2) && (layoutVersion != 3) && (layoutVersion != 4)
-                    && (layoutVersion != 5)) {
+            if ((layoutVersion < 1) || (layoutVersion > SDDSUtil.SDDS_VERSION)) {
                 setError("SDDS version of file is unrecognized by this version of SDDS/Java (parseHeaders)");
                 return false;
             }
-            outer: while (true) {
-
-                c = st.nextToken();
-                if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                    try {
-                        line = new String(dis.readLine());
-                        sr = new StringReader(line);
-                    } catch (Exception e) {
-                        setError("unable to read header lines (parseHeaders)");
-                        return false;
-                    }
-                    st = new StreamTokenizer(sr);
-                    st.resetSyntax();
-                    st.whitespaceChars('\u0000', '\u0020');
-                    st.commentChar('!');
-                    st.quoteChar(34);
-                    st.wordChars(35, 255);
-                    st.whitespaceChars('=', '=');
-                    st.whitespaceChars(',', ',');
-                    st.eolIsSignificant(false);
-                    st.lowerCaseMode(false);
-
-                    c = st.nextToken();
-                    if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                        if (SDDSUtil.strncmp(line, "!# big-endian", 13)) {
-                            bigEndian = true;
-                        } else if (SDDSUtil.strncmp(line, "!# little-endian", 16)) {
-                            bigEndian = false;
-                        }
-                        continue;
-                    }
-                }
-
-                token = st.sval;
-                if (header == 0) {
-                    if (token.equals("&parameter")) {
-                        name = symbol = units = description = format_string = fixed_value = null;
-                        type = 0;
-                        header = 1;
-                    } else if (token.equals("&column")) {
-                        name = symbol = units = description = format_string = null;
-                        type = field_length = 0;
-                        header = 2;
-                    } else if (token.equals("&data")) {
-                        header = 3;
-                    } else if (token.equals("&description")) {
-                        header = 4;
-                    } else if (token.equals("&array")) {
-                        name = symbol = units = description = format_string = group_name = null;
-                        type = field_length = 0;
-                        dimensions = 1;
-                        header = 5;
-                    } else if (token.equals("&associate")) {
-                        // this is not supported
-                        header = 6;
-                    } else {
-                        break outer;
-                    }
-                    continue;
-                }
-                switch (header) {
-                    case 1:
-                        if (token.equals("&end")) {
-                            if (type == SDDS_LONGDOUBLE) {
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            }
-                            if (defineParameter(name, symbol, units, description, format_string, type,
-                                    fixed_value) == -1) {
-                                setError("invalid parameter header (parseHeaders)");
-                                return false;
-                            }
-                            header = 0;
-                            break;
-                        }
-                        if (token.equals("name")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            name = st.sval;
-                        } else if (token.equals("type")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            type = SDDSUtil.identifyType(st.sval);
-                        } else if (token.equals("symbol")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            symbol = st.sval;
-                        } else if (token.equals("units")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            units = st.sval;
-                        } else if (token.equals("description")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            description = st.sval;
-                        } else if (token.equals("format_string")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            format_string = st.sval;
-                        } else if (token.equals("fixed_value")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            fixed_value = st.sval;
-                        }
-                        break;
-                    case 2:
-                        if (token.equals("&end")) {
-                            if (type == SDDS_LONGDOUBLE) {
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            }
-                            if (defineColumn(name, symbol, units, description, format_string, type,
-                                    field_length) == -1) {
-                                setError("invalid column header (parseHeaders)");
-                                return false;
-                            }
-                            header = 0;
-                        }
-                        if (token.equals("name")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            name = st.sval;
-                        } else if (token.equals("type")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            type = SDDSUtil.identifyType(st.sval);
-                        } else if (token.equals("symbol")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            symbol = st.sval;
-                        } else if (token.equals("units")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            units = st.sval;
-                        } else if (token.equals("description")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            description = st.sval;
-                        } else if (token.equals("format_string")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            format_string = st.sval;
-                        } else if (token.equals("field_length")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            try {
-                                field_length = (Integer.valueOf(st.sval)).intValue();
-                            } catch (NumberFormatException e) {
-                                setError("invalid field_length (parseHeaders)");
-                                return false;
-                            }
-                        }
-                        break;
-                    case 3:
-                        if (token.equals("&end")) {
-                            return true;
-                        }
-                        if (token.equals("mode")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            if (st.sval.equals("binary"))
-                                asciiFile = false;
-                            else
-                                asciiFile = true;
-                        }
-                        if (token.equals("no_row_counts")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            try {
-                                if ((Integer.valueOf(st.sval)).intValue() != 0)
-                                    noRowCount = true;
-                                else
-                                    noRowCount = false;
-                            } catch (NumberFormatException e) {
-                                setError("invalid no_row_counts (parseHeaders)");
-                                return false;
-                            }
-                        }
-                        if (token.equals("endian")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            if (st.sval.equals("little"))
-                                bigEndian = false;
-                            else
-                                bigEndian = true;
-                        }
-                        if (token.equals("column_major_order")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            try {
-                                if ((Integer.valueOf(st.sval)).intValue() != 0)
-                                    columnMajorOrder = true;
-                                else
-                                    columnMajorOrder = false;
-                            } catch (NumberFormatException e) {
-                                setError("invalid column_major_order (parseHeaders)");
-                                return false;
-                            }
-                        }
-                        break;
-                    case 4:
-                        if (token.equals("&end")) {
-                            header = 0;
-                            break;
-                        }
-                        if (token.equals("text")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            descriptionText = st.sval;
-                        } else if (token.equals("contents")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            descriptionContents = st.sval;
-                        }
-                        break;
-                    case 5:
-                        if (token.equals("&end")) {
-                            if (type == SDDS_LONGDOUBLE) {
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            }
-                            if (defineArray(name, symbol, units, description, format_string,
-                                    group_name, type, field_length, dimensions) == -1) {
-                                setError("invalid array header (parseHeaders)");
-                                return false;
-                            }
-                            header = 0;
-                        }
-                        if (token.equals("name")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            name = st.sval;
-                        } else if (token.equals("type")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            type = SDDSUtil.identifyType(st.sval);
-                        } else if (token.equals("symbol")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            symbol = st.sval;
-                        } else if (token.equals("units")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            units = st.sval;
-                        } else if (token.equals("description")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            description = st.sval;
-                        } else if (token.equals("format_string")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            format_string = st.sval;
-                        } else if (token.equals("group_name")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            group_name = st.sval;
-                        } else if (token.equals("field_length")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            try {
-                                field_length = (Integer.valueOf(st.sval)).intValue();
-                            } catch (NumberFormatException e) {
-                                setError("invalid field_length (parseHeaders)");
-                                return false;
-                            }
-                        } else if (token.equals("dimensions")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            try {
-                                dimensions = (Integer.valueOf(st.sval)).intValue();
-                            } catch (NumberFormatException e) {
-                                setError("invalid dimensions (parseHeaders)");
-                                return false;
-                            }
-                        }
-                        break;
-                    case 6:
-                        // not supported at this time
-                        if (token.equals("&end")) {
-                            header = 0;
-                            break;
-                        }
-                        if (token.equals("name")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            //associateName = st.sval;
-                        } else if (token.equals("filename")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            //associateFilename = st.sval;
-                        } else if (token.equals("path")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            //associatePath = st.sval;
-                        } else if (token.equals("sdds")) {
-                            c = st.nextToken();
-                            if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar))
-                                break outer;
-                            //associateSdds = st.sval;
-                        }
-                        break;
-                }
+            if (!readLayout(dis, 0)) {
+                setError("problem reading header lines (parseHeaders)");
+                return false;
             }
-        } catch (Exception e) {
-            setError("problem reading header lines (parseHeaders)");
+            return true;
+        } catch (IOException | IllegalArgumentException e) {
+            setError(e.getMessage() + " (parseHeaders)");
+            return false;
+        } catch (OutOfMemoryError e) {
+            setError("not enough memory to read header lines (parseHeaders)");
             return false;
         }
-        setError("problem reading header lines (parseHeaders)");
-        return false;
+    }
+
+    /** Process layout commands from a stream, descending into included files. */
+    private boolean readLayout(InputStream in, int depth) throws IOException {
+        String command;
+        while ((command = layoutVersion == 6 ? readCommand6(in) : readCommandLegacy(in)) != null) {
+            int space = -1;
+            for (int i = 0; (i < command.length()) && (space < 0); i++) {
+                if ((command.charAt(i) == ' ') || (command.charAt(i) == '\t'))
+                    space = i;
+            }
+            if (space < 0)
+                throw new IOException("no groupname in namelist");
+            String group = command.substring(1, space);
+            String text = command.substring(space + 1);
+            if (group.equals("description")) {
+                Map<String, String> f = parseCommand(text, SDDSNamelist.DESCRIPTION_FIELDS);
+                descriptionText = SDDSText.fromRaw(f.get("text"));
+                descriptionContents = SDDSText.fromRaw(f.get("contents"));
+            } else if (group.equals("column")) {
+                processColumn(parseCommand(text, SDDSNamelist.COLUMN_FIELDS));
+            } else if (group.equals("parameter")) {
+                processParameter(parseCommand(text, SDDSNamelist.PARAMETER_FIELDS));
+            } else if (group.equals("array")) {
+                processArray(parseCommand(text, SDDSNamelist.ARRAY_FIELDS));
+            } else if (group.equals("associate")) {
+                /* The toolkit is built without associate support and ignores these too. */
+            } else if (group.equals("data")) {
+                processDataMode(parseCommand(text, SDDSNamelist.DATA_FIELDS));
+                return true;
+            } else if (group.equals("include")) {
+                String filename = SDDSText.fromRaw(parseCommand(text, SDDSNamelist.INCLUDE_FIELDS).get("filename"));
+                if (filename == null)
+                    throw new IOException("Problem parsing include namelist");
+                if (depth >= INCLUDE_DEPTH_LIMIT)
+                    throw new IOException("Too many nested include commands");
+                try (InputStream included = new BufferedInputStream(new FileInputStream(filename))) {
+                    if (!readLayout(included, depth + 1))
+                        return false;
+                }
+                if (dataCommandSeen)
+                    return true;
+            } else {
+                throw new IOException("Unknown layout entry " + group + " given");
+            }
+        }
+        /* Only a clean end of file may finish an included file. */
+        return depth != 0;
+    }
+
+    private Map<String, String> parseCommand(String text, java.util.List<String> fields) throws IOException {
+        return layoutVersion == 6 ? SDDSNamelist.parse6(text, fields) : SDDSNamelist.parseLegacy(text, fields);
+    }
+
+    /** Read the next line that is not a comment, with any inline comment removed. */
+    private String nextLine(InputStream in) throws IOException {
+        String line;
+        while ((line = SDDSText.readRawLine(in)) != null) {
+            if (line.charAt(0) != '!')
+                return SDDSText.cutOutComments(line);
+            if ((line.length() > 1) && (line.charAt(1) == '#'))
+                parseSpecialComment(line.substring(2));
+        }
+        return null;
+    }
+
+    /** Note the settings given by a comment such as <code>!# big-endian</code>. */
+    private void parseSpecialComment(String text) {
+        int[] cursor = { 0 };
+        String token;
+        while (((token = SDDSText.nextToken(text, cursor)) != null) && !token.isEmpty()) {
+            if (token.equals("big-endian"))
+                bigEndianComment = true;
+            else if (token.equals("little-endian"))
+                littleEndianComment = true;
+            else if (token.equals("fixed-rowcount"))
+                fixedRowCountComment = true;
+        }
+    }
+
+    private static String lineToSpace(String line) {
+        int n = line.length();
+        if ((n > 0) && (line.charAt(n - 1) == '\n')) {
+            n--;
+            if ((n > 0) && (line.charAt(n - 1) == '\r'))
+                n--;
+            StringBuilder out = new StringBuilder(line.substring(0, n));
+            while (out.length() < line.length())
+                out.append(' ');
+            return out.toString();
+        }
+        return line;
+    }
+
+    /**
+     * Read one command with the legacy grammar (SDDS_GetNamelist).
+     *
+     * @return the raw command starting at its ampersand, or <code>null</code> if there
+     *         are no more commands
+     */
+    private String readCommandLegacy(InputStream in) throws IOException {
+        String line;
+        while ((line = nextLine(in)) != null) {
+            int amp = line.indexOf('&');
+            if ((amp >= 0) && !SDDSText.isQuoted(line, amp))
+                break;
+        }
+        if (line == null)
+            return null;
+        StringBuilder buffer = new StringBuilder(lineToSpace(line));
+        int start = -1;
+        for (int p = 0; (p < buffer.length()) && (start < 0);) {
+            char c = buffer.charAt(p);
+            if (c == '"') {
+                p++;
+                while ((p < buffer.length()) && (buffer.charAt(p) != '"'))
+                    p++;
+                if (p < buffer.length())
+                    p++;
+            } else if (c == '&') {
+                if (buffer.indexOf("&end", p) == p)
+                    return null;
+                start = p;
+            } else {
+                p++;
+            }
+        }
+        if (start < 0)
+            return null;
+        for (int q = buffer.length() - 4; q >= 0; q--) {
+            if ((buffer.charAt(q) == '&') && ((q == 0) || (buffer.charAt(q - 1) != '\\'))
+                    && (buffer.indexOf("&end", q) == q) && !SDDSText.isQuoted(buffer, q))
+                return buffer.substring(start, q);
+        }
+        for (int lines = 0; (line = nextLine(in)) != null; lines++) {
+            String part = lineToSpace(line);
+            int offset = buffer.length();
+            int end = part.indexOf("&end");
+            buffer.append(part);
+            if ((end >= 0) && !SDDSText.isQuoted(buffer, offset + end))
+                return buffer.substring(start);
+            /* A file with binary data dumped into its header must not loop forever. */
+            if (lines > 10000)
+                return null;
+        }
+        return null;
+    }
+
+    /**
+     * Read one command with the bounded SDDS6 grammar (SDDS6_GetNamelist), preserving
+     * quoted delimiters and escape parity.
+     *
+     * @return the raw command without its <code>&amp;end</code>, or <code>null</code>
+     *         at a clean end of file
+     */
+    private String readCommand6(InputStream in) throws IOException {
+        StringBuilder s = new StringBuilder(256);
+        StringBuilder commentText = new StringBuilder();
+        long limit = SDDSEnumDefinition.getLayoutLimit();
+        boolean quoted = false, escaped = false, started = false, comment = false;
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == 0)
+                throw new IOException("NUL in SDDS6 header");
+            if (comment) {
+                if (c == '\n') {
+                    if ((commentText.length() > 0) && (commentText.charAt(0) == '#'))
+                        parseSpecialComment(commentText.substring(1));
+                    commentText.setLength(0);
+                    comment = false;
+                    /* Inside a command the newline ending a comment still separates tokens. */
+                    if (!started)
+                        continue;
+                } else {
+                    if (commentText.length() < 255)
+                        commentText.append((char) c);
+                    continue;
+                }
+            }
+            if (!quoted && (c == '!')) {
+                comment = true;
+                continue;
+            }
+            if (!started) {
+                if (c != '&')
+                    continue;
+                started = true;
+            }
+            if (s.length() + 1 >= limit)
+                throw new IOException("SDDS6 layout command exceeds configured byte limit");
+            s.append(((c == '\n') || (c == '\r')) && !quoted ? ' ' : (char) c);
+            if ((c == '"') && !escaped)
+                quoted = !quoted;
+            int used = s.length();
+            if (!quoted && (used >= 4) && (s.charAt(used - 4) == '&') && (s.charAt(used - 3) == 'e')
+                    && (s.charAt(used - 2) == 'n') && (s.charAt(used - 1) == 'd')) {
+                /* Consume the rest of the header line without consuming binary page bytes. */
+                boolean trailingComment = false;
+                while (((c = in.read()) != -1) && (c != '\n')) {
+                    if (c == 0)
+                        throw new IOException("NUL after SDDS6 namelist");
+                    if (c == '!')
+                        trailingComment = true;
+                    if (trailingComment)
+                        continue;
+                    if ((c != ' ') && (c != '\t') && (c != '\r') && (c != ','))
+                        throw new IOException("Unexpected text after SDDS6 &end");
+                }
+                s.setLength(used - 4);
+                return s.toString();
+            }
+            escaped = (c == '\\') && !escaped;
+        }
+        if (started)
+            throw new IOException("Unterminated SDDS6 namelist");
+        return null;
+    }
+
+    private int typeField(Map<String, String> f) throws IOException {
+        String type = f.get("type");
+        if (type == null)
+            return 0;
+        int id = SDDSUtil.identifyTypeExactly(type);
+        if (id == 0)
+            throw new IOException("Unrecognized value given for type: " + type);
+        return id;
+    }
+
+    /** Apply the rule that only enums, and only in SDDS6, may have enum_values. */
+    private void checkEnumFields(int type, String enumValues) throws IOException {
+        if (((type == SDDS_ENUM) || (enumValues != null)) && (layoutVersion < 6))
+            throw new IOException("Enum definitions require SDDS6");
+        if ((type != SDDS_ENUM) && (enumValues != null))
+            throw new IOException("enum_values is only valid for type=enum");
+    }
+
+    private void processColumn(Map<String, String> f) throws IOException {
+        int type = typeField(f);
+        String enumValues = SDDSText.fromRaw(f.get("enum_values"));
+        checkEnumFields(type, enumValues);
+        int length = SDDSNamelist.integerField(f, "field_length", 0);
+        String name = SDDSText.fromRaw(f.get("name")), symbol = SDDSText.fromRaw(f.get("symbol"));
+        String units = SDDSText.fromRaw(f.get("units")), description = SDDSText.fromRaw(f.get("description"));
+        String format = SDDSText.fromRaw(f.get("format_string"));
+        int index = type == SDDS_ENUM ? defineEnumColumn(name, symbol, units, description, format, enumValues, length)
+                : defineColumn(name, symbol, units, description, format, type, length);
+        if (index == -1)
+            throw new IOException("invalid column header");
+    }
+
+    private void processParameter(Map<String, String> f) throws IOException {
+        int type = typeField(f);
+        String enumValues = SDDSText.fromRaw(f.get("enum_values"));
+        checkEnumFields(type, enumValues);
+        String name = SDDSText.fromRaw(f.get("name")), symbol = SDDSText.fromRaw(f.get("symbol"));
+        String units = SDDSText.fromRaw(f.get("units")), description = SDDSText.fromRaw(f.get("description"));
+        String format = SDDSText.fromRaw(f.get("format_string")), fixed = SDDSText.fromRaw(f.get("fixed_value"));
+        int index = type == SDDS_ENUM
+                ? defineEnumParameter(name, symbol, units, description, format, enumValues, fixed)
+                : defineParameter(name, symbol, units, description, format, type, fixed);
+        if (index == -1)
+            throw new IOException("invalid parameter header");
+    }
+
+    private void processArray(Map<String, String> f) throws IOException {
+        int type = typeField(f);
+        String enumValues = SDDSText.fromRaw(f.get("enum_values"));
+        checkEnumFields(type, enumValues);
+        int length = SDDSNamelist.integerField(f, "field_length", 0);
+        int dimensions = SDDSNamelist.integerField(f, "dimensions", 1);
+        String name = SDDSText.fromRaw(f.get("name")), symbol = SDDSText.fromRaw(f.get("symbol"));
+        String units = SDDSText.fromRaw(f.get("units")), description = SDDSText.fromRaw(f.get("description"));
+        String format = SDDSText.fromRaw(f.get("format_string")), group = SDDSText.fromRaw(f.get("group_name"));
+        int index = type == SDDS_ENUM
+                ? defineEnumArray(name, symbol, units, description, format, group, enumValues, length, dimensions)
+                : defineArray(name, symbol, units, description, format, group, type, length, dimensions);
+        if (index == -1)
+            throw new IOException("invalid array header");
+    }
+
+    private void processDataMode(Map<String, String> f) throws IOException {
+        String mode = f.get("mode");
+        if (mode == null)
+            throw new IOException("Problem with data namelist: mode not given.");
+        if (!mode.equals("ascii") && !mode.equals("binary"))
+            throw new IOException("Unrecognized value given for mode: " + mode);
+        asciiFile = mode.equals("ascii");
+        linesPerRow = SDDSNamelist.integerField(f, "lines_per_row", 1);
+        if (asciiFile && (linesPerRow < 0))
+            throw new IOException("Unable to process data mode--lines_per_row is invalid");
+        noRowCount = SDDSNamelist.integerField(f, "no_row_counts", 0) != 0;
+        additionalHeaderLines = SDDSNamelist.integerField(f, "additional_header_lines", 0);
+        columnMajorOrder = (short) SDDSNamelist.integerField(f, "column_major_order", 0) != 0;
+        fixedRowCount = fixedRowCountComment || (SDDSNamelist.integerField(f, "fixed_row_count", 0) != 0);
+        String endian = f.get("endian");
+        if ((endian != null) && !endian.equals("big") && !endian.equals("little"))
+            throw new IOException("Unrecognized value given for endian: " + endian);
+        if (bigEndianComment && littleEndianComment)
+            throw new IOException("Unable to read data as it says it is both big and little endian");
+        boolean declaredBig = bigEndianComment || "big".equals(endian);
+        boolean declaredLittle = littleEndianComment || "little".equals(endian);
+        boolean nativeBig = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN;
+        /* Data with no declared order is native, and of two conflicting declarations the non-native one wins. */
+        if (declaredBig && declaredLittle)
+            bigEndian = !nativeBig;
+        else if (declaredBig || declaredLittle)
+            bigEndian = declaredBig;
+        else
+            bigEndian = nativeBig;
+        endianSet = false;
+        dataCommandSeen = true;
+    }
+
+    /** Holds the values of one page until the whole page has been read. */
+    private final class PageData {
+        final Object[] parameters = new Object[parameterCount];
+        final int[][] dimensions = new int[arrayCount][];
+        final Object[] arrays = new Object[arrayCount];
+        final Object[] columns = new Object[columnCount];
+        int rows = 0;
+
+        void commit(int page) {
+            for (int i = 0; i < parameterCount; i++) {
+                parameterObject[i].makeBlankPages(page);
+                if (parameters[i] != null)
+                    parameterObject[i].store(parameters[i], page);
+            }
+            for (int i = 0; i < arrayCount; i++) {
+                arrayObject[i].makeBlankPages(page);
+                arrayObject[i].setDim(page, dimensions[i]);
+                arrayObject[i].store(arrays[i], Array.getLength(arrays[i]), page);
+            }
+            for (int i = 0; i < columnCount; i++) {
+                columnObject[i].makeBlankPages(page);
+                if (rows > 0)
+                    columnObject[i].store(columns[i], rows, page, 1);
+            }
+        }
+    }
+
+    /** Multiply array dimensions, refusing a size Java cannot hold. */
+    private int arrayElements(int[] dim) throws IOException {
+        long elements = 1;
+        for (int i = 0; i < dim.length; i++) {
+            if (dim[i] < 0)
+                throw new IOException("Unable to read array--dimensions missing or negative");
+            elements *= dim[i];
+            if (elements > ARRAY_SIZE_LIMIT)
+                throw new IOException("Array size exceeds limit in Java SDDS");
+        }
+        return (int) elements;
+    }
+
+    /** Read as many bytes as are left, up to the size of the buffer. */
+    private int readAvailable(byte[] b) throws IOException {
+        int n = 0;
+        while (n < b.length) {
+            int count = dis.read(b, n, b.length - n);
+            if (count < 0)
+                break;
+            n += count;
+        }
+        return n;
+    }
+
+    /**
+     * Read the row count of a binary page.
+     *
+     * @return the count, or <code>-1</code> at the end of the data
+     */
+    private long readBinaryRowCount() throws IOException {
+        byte[] b = new byte[4];
+        if (readAvailable(b) != 4)
+            return -1;
+        int rows32 = 0;
+        for (int i = 0; i < 4; i++)
+            rows32 = (rows32 << 8) | (b[bigEndian ? i : 3 - i] & 0xff);
+        if (rows32 != Integer.MIN_VALUE) {
+            if (rows32 < 0)
+                throw new IOException("Unable to read page--invalid number of rows");
+            return rows32;
+        }
+        /* The marker for a row count too large for 32 bits. */
+        b = new byte[8];
+        if (readAvailable(b) != 8)
+            return -1;
+        long rows = 0;
+        for (int i = 0; i < 8; i++)
+            rows = (rows << 8) | (b[bigEndian ? i : 7 - i] & 0xffL);
+        if (rows < 0)
+            throw new IOException("Unable to read page--invalid number of rows");
+        return rows;
     }
 
     /**
@@ -1114,708 +942,88 @@ public class SDDSFile {
      *         <code>false</code> if an error occurs
      */
     public boolean readBinaryData() {
-        int row, page, rows, i, j, size, arraySize, dimCount = 0;
-        int[] dim;
-        long[][] longValues;
-        double[][] doubleValues;
-        String[][] stringValues;
-        long[][] arrLongValues;
-        double[][] arrDoubleValues;
-        String[][] arrStringValues;
-        int[] colDataTypes;
-        int[] parDataTypes;
-        int[] arrDataTypes;
-        byte[] buf;
-        char[] c = new char[1];
-        long v;
-        longValues = new long[columnCount][];
-        doubleValues = new double[columnCount][];
-        stringValues = new String[columnCount][];
-        arrLongValues = new long[arrayCount][];
-        arrDoubleValues = new double[arrayCount][];
-        arrStringValues = new String[arrayCount][];
-        colDataTypes = new int[columnCount];
-        parDataTypes = new int[parameterCount];
-        arrDataTypes = new int[arrayCount];
-        for (i = 0; i < columnCount; i++) {
-            colDataTypes[i] = columnObject[i].getType();
-        }
-        for (i = 0; i < parameterCount; i++) {
-            parDataTypes[i] = parameterObject[i].getType();
-        }
-        for (i = 0; i < arrayCount; i++) {
-            arrDataTypes[i] = arrayObject[i].getType();
-        }
-        page = 1;
-
-        if (bigEndian) {
-            try {
-                while (true) {
-                    try {
-                        rows = dis.readInt();
-                    } catch (Exception e) {
-                        if (page > 1)
-                            return true;
-                        setError("Unexpected end of file (readBinaryData)");
-                        return false;
-                    }
-                    if (rows == Integer.MAX_VALUE) {
-                        setError("Row count exceeds limit in Java SDDS (readBinaryData)");
-                        return false;
-                    }
-                    for (i = 0; i < parameterCount; i++) {
-                        if (parameterObject[i].fixed)
-                            continue;
-                        switch (parDataTypes[i]) {
-                            case SDDS_SHORT:
-                                setParameter(i, dis.readShort(), page);
-                                break;
-                            case SDDS_USHORT:
-                                setParameter(i, (int) (dis.readShort() & 0xffff), page);
-                                break;
-                            case SDDS_LONG:
-                                setParameter(i, dis.readInt(), page);
-                                break;
-                            case SDDS_ULONG:
-                                setParameter(i, (long) (dis.readInt() & 0xffffffffL), page);
-                                break;
-                            case SDDS_LONG64:
-                                setParameter(i, dis.readLong(), page);
-                                break;
-                            case SDDS_ULONG64:
-                                v = dis.readLong();
-                                if (v < 0)
-                                    v = 0;
-                                setParameter(i, v, page);
-                                break;
-                            case SDDS_FLOAT:
-                                setParameter(i, dis.readFloat(), page);
-                                break;
-                            case SDDS_DOUBLE:
-                                setParameter(i, dis.readDouble(), page);
-                                break;
-                            case SDDS_LONGDOUBLE:
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            case SDDS_STRING:
-                                size = dis.readInt();
-                                buf = new byte[size];
-                                dis.readFully(buf, 0, size);
-                                setParameter(i, (new String(buf)), page);
-                                break;
-                            case SDDS_CHARACTER:
-                                setParameter(i, (char) dis.readByte(), page);
-                                break;
-                        }
-                    }
-
-                    for (i = 0; i < arrayCount; i++) {
-                        // read the array size and then read the arrays
-                        dim = new int[getArrayDimensions(i)];
-                        while (getArrayDimensions(i) != dimCount) {
-                            dim[dimCount] = dis.readInt();
-                            dimCount++;
-                        }
-                        arraySize = dim[0];
-                        for (j = 1; j < dimCount; j++) {
-                            arraySize *= dim[j];
-                        }
-                        setArrayDim(page, i, dim);
-                        dimCount = 0;
-                        switch (arrDataTypes[i]) {
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                arrLongValues[i] = new long[arraySize];
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                            case SDDS_LONGDOUBLE:
-                                arrDoubleValues[i] = new double[arraySize];
-                                break;
-                            case SDDS_STRING:
-                            case SDDS_CHARACTER:
-                                arrStringValues[i] = new String[arraySize];
-                                break;
-                        }
-                        for (j = 0; j < arraySize; j++) {
-                            switch (arrDataTypes[i]) {
-                                case SDDS_SHORT:
-                                    arrLongValues[i][j] = (long) dis.readShort();
-                                    break;
-                                case SDDS_USHORT:
-                                    arrLongValues[i][j] = (long) ((int) (dis.readShort() & 0xffff));
-                                    break;
-                                case SDDS_LONG:
-                                    arrLongValues[i][j] = (long) dis.readInt();
-                                    break;
-                                case SDDS_ULONG:
-                                    arrLongValues[i][j] = (long) ((long) (dis.readInt() & 0xffffffffL));
-                                    break;
-                                case SDDS_LONG64:
-                                    arrLongValues[i][j] = (long) dis.readLong();
-                                    break;
-                                case SDDS_ULONG64:
-                                    arrLongValues[i][j] = (long) dis.readLong();
-                                    if (arrLongValues[i][j] < 0)
-                                        arrLongValues[i][j] = 0;
-                                    break;
-                                case SDDS_FLOAT:
-                                    arrDoubleValues[i][j] = (double) dis.readFloat();
-                                    break;
-                                case SDDS_DOUBLE:
-                                    arrDoubleValues[i][j] = dis.readDouble();
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                    size = (int) dis.readInt();
-                                    buf = new byte[size];
-                                    dis.readFully(buf, 0, size);
-                                    arrStringValues[i][j] = new String(buf);
-                                    break;
-                                case SDDS_CHARACTER:
-                                    c[0] = (char) dis.readByte();
-                                    arrStringValues[i][j] = new String(c);
-                                    break;
-                            }
-                        }
-                        switch (arrDataTypes[i]) {
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                if (!setArray(i, arrLongValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                                if (!setArray(i, arrDoubleValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                            case SDDS_LONGDOUBLE:
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            case SDDS_STRING:
-                            case SDDS_CHARACTER:
-                                if (!setArray(i, arrStringValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                        }
-                    }
-                    if (rows > 0) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    longValues[i] = new long[rows];
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                case SDDS_LONGDOUBLE:
-                                    doubleValues[i] = new double[rows];
-                                    break;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    stringValues[i] = new String[rows];
-                                    break;
-                            }
-                        }
-                    }
-                    if (columnMajorOrder) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) dis.readShort();
-                                    break;
-                                case SDDS_USHORT:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ((int) (dis.readShort() & 0xffff));
-                                    break;
-                                case SDDS_LONG:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) dis.readInt();
-                                    break;
-                                case SDDS_ULONG:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ((long) (dis.readInt() & 0xffffffffL));
-                                    break;
-                                case SDDS_LONG64:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) dis.readLong();
-                                    break;
-                                case SDDS_ULONG64:
-                                    for (row = 0; row < rows; row++) {
-                                        longValues[i][row] = (long) dis.readLong();
-                                        if (longValues[i][row] < 0)
-                                            longValues[i][row] = 0;
-                                    }
-                                    break;
-                                case SDDS_FLOAT:
-                                    for (row = 0; row < rows; row++)
-                                        doubleValues[i][row] = (double) dis.readFloat();
-                                    break;
-                                case SDDS_DOUBLE:
-                                    for (row = 0; row < rows; row++)
-                                        doubleValues[i][row] = (double) dis.readDouble();
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                    for (row = 0; row < rows; row++) {
-                                        size = (int) dis.readInt();
-                                        buf = new byte[size];
-                                        dis.readFully(buf, 0, size);
-                                        stringValues[i][row] = new String(buf);
-                                    }
-                                    break;
-                                case SDDS_CHARACTER:
-                                    for (row = 0; row < rows; row++) {
-                                        c[0] = (char) dis.readByte();
-                                        stringValues[i][row] = new String(c);
-                                    }
-                                    break;
-                            }
-                        }
-                    } else {
-                        for (row = 0; row < rows; row++) {
-                            for (i = 0; i < columnCount; i++) {
-                                switch (colDataTypes[i]) {
-                                    case SDDS_SHORT:
-                                        longValues[i][row] = (long) dis.readShort();
-                                        break;
-                                    case SDDS_USHORT:
-                                        longValues[i][row] = (long) ((int) (dis.readShort() & 0xffff));
-                                        break;
-                                    case SDDS_LONG:
-                                        longValues[i][row] = (long) dis.readInt();
-                                        break;
-                                    case SDDS_ULONG:
-                                        longValues[i][row] = (long) ((long) (dis.readInt() & 0xffffffffL));
-                                        break;
-                                    case SDDS_LONG64:
-                                        longValues[i][row] = (long) dis.readLong();
-                                        break;
-                                    case SDDS_ULONG64:
-                                        longValues[i][row] = (long) dis.readLong();
-                                        if (longValues[i][row] < 0)
-                                            longValues[i][row] = 0;
-                                        break;
-                                    case SDDS_FLOAT:
-                                        doubleValues[i][row] = (double) dis.readFloat();
-                                        break;
-                                    case SDDS_DOUBLE:
-                                        doubleValues[i][row] = (double) dis.readDouble();
-                                        break;
-                                    case SDDS_LONGDOUBLE:
-                                        setError("error: longdouble not supported in SDDSJava");
-                                        return false;
-                                    case SDDS_STRING:
-                                        size = (int) dis.readInt();
-                                        buf = new byte[size];
-                                        dis.readFully(buf, 0, size);
-                                        stringValues[i][row] = new String(buf);
-                                        break;
-                                    case SDDS_CHARACTER:
-                                        c[0] = (char) dis.readByte();
-                                        stringValues[i][row] = new String(c);
-                                        break;
-                                }
-                            }
-                        }
-                    }
-                    if (rows > 0) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    if (!setColumn(i, longValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                    if (!setColumn(i, doubleValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    if (!setColumn(i, stringValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                            }
-                        }
-                    }
-                    if (dis.available() == 0)
-                        return true;
-                    page++;
+        DataInput in = bigEndian ? (DataInput) dis : (DataInput) ledis;
+        pagesEnded = false;
+        try {
+            for (int page = 1; !pagesEnded; page++) {
+                long rows = readBinaryRowCount();
+                if (rows < 0)
+                    return true;
+                if (rows > ARRAY_SIZE_LIMIT) {
+                    setError("Row count exceeds limit in Java SDDS (readBinaryData)");
+                    return false;
                 }
-            } catch (IOException e) {
-                setError("error reading binary data (readBinaryData)");
-            }
-        } else {
-            try {
-                while (true) {
-                    try {
-                        rows = ledis.readInt();
-                    } catch (Exception e) {
-                        if (page > 1)
-                            return true;
-                        setError("Unexpected end of file (readBinaryData)");
-                        return false;
+                PageData data = new PageData();
+                data.rows = (int) rows;
+                for (int i = 0; i < parameterCount; i++) {
+                    if (parameterObject[i].fixed) {
+                        checkFixedValue(i);
+                        continue;
                     }
-                    for (i = 0; i < parameterCount; i++) {
-                        if (parameterObject[i].fixed)
-                            continue;
-                        switch (parDataTypes[i]) {
-                            case SDDS_SHORT:
-                                setParameter(i, ledis.readShort(), page);
-                                break;
-                            case SDDS_USHORT:
-                                setParameter(i, (int) (ledis.readShort() & 0xffff), page);
-                                break;
-                            case SDDS_LONG:
-                                setParameter(i, ledis.readInt(), page);
-                                break;
-                            case SDDS_ULONG:
-                                setParameter(i, (long) (ledis.readInt() & 0xffffffffL), page);
-                                break;
-                            case SDDS_LONG64:
-                                setParameter(i, ledis.readLong(), page);
-                                break;
-                            case SDDS_ULONG64:
-                                v = ledis.readLong();
-                                if (v < 0)
-                                    v = 0;
-                                setParameter(i, v, page);
-                                break;
-                            case SDDS_FLOAT:
-                                setParameter(i, ledis.readFloat(), page);
-                                break;
-                            case SDDS_DOUBLE:
-                                setParameter(i, ledis.readDouble(), page);
-                                break;
-                            case SDDS_LONGDOUBLE:
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            case SDDS_STRING:
-                                size = ledis.readInt();
-                                buf = new byte[size];
-                                ledis.readFully(buf, 0, size);
-                                setParameter(i, (new String(buf)), page);
-                                break;
-                            case SDDS_CHARACTER:
-                                setParameter(i, (char) ledis.readByte(), page);
-                                break;
-                        }
-                    }
-                    for (i = 0; i < arrayCount; i++) {
-                        // read the array size and then read the arrays
-                        dim = new int[getArrayDimensions(i)];
-                        while (getArrayDimensions(i) != dimCount) {
-                            dim[dimCount] = ledis.readInt();
-                            dimCount++;
-                        }
-                        arraySize = dim[0];
-                        for (j = 1; j < dimCount; j++) {
-                            arraySize *= dim[j];
-                        }
-                        setArrayDim(page, i, dim);
-                        dimCount = 0;
-                        switch (arrDataTypes[i]) {
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                arrLongValues[i] = new long[arraySize];
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                            case SDDS_LONGDOUBLE:
-                                arrDoubleValues[i] = new double[arraySize];
-                                break;
-                            case SDDS_STRING:
-                            case SDDS_CHARACTER:
-                                arrStringValues[i] = new String[arraySize];
-                                break;
-                        }
-                        for (j = 0; j < arraySize; j++) {
-                            switch (arrDataTypes[i]) {
-                                case SDDS_SHORT:
-                                    arrLongValues[i][j] = (long) ledis.readShort();
-                                    break;
-                                case SDDS_USHORT:
-                                    arrLongValues[i][j] = (long) ((int) (ledis.readShort() & 0xffff));
-                                    break;
-                                case SDDS_LONG:
-                                    arrLongValues[i][j] = (long) ledis.readInt();
-                                    break;
-                                case SDDS_ULONG:
-                                    arrLongValues[i][j] = (long) ((long) (ledis.readInt() & 0xffffffffL));
-                                    break;
-                                case SDDS_LONG64:
-                                    arrLongValues[i][j] = (long) ledis.readLong();
-                                    break;
-                                case SDDS_ULONG64:
-                                    arrLongValues[i][j] = (long) ledis.readLong();
-                                    if (arrLongValues[i][j] < 0)
-                                        arrLongValues[i][j] = 0;
-                                    break;
-                                case SDDS_FLOAT:
-                                    arrDoubleValues[i][j] = (double) ledis.readFloat();
-                                    break;
-                                case SDDS_DOUBLE:
-                                    arrDoubleValues[i][j] = ledis.readDouble();
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                    size = (int) ledis.readInt();
-                                    buf = new byte[size];
-                                    dis.readFully(buf, 0, size);
-                                    arrStringValues[i][j] = new String(buf);
-                                    break;
-                                case SDDS_CHARACTER:
-                                    c[0] = (char) ledis.readByte();
-                                    arrStringValues[i][j] = new String(c);
-                                    break;
-                            }
-                        }
-                        switch (arrDataTypes[i]) {
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                if (!setArray(i, arrLongValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                                if (!setArray(i, arrDoubleValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                            case SDDS_LONGDOUBLE:
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                            case SDDS_STRING:
-                            case SDDS_CHARACTER:
-                                if (!setArray(i, arrStringValues[i], page)) {
-                                    setError("unable to set array data (readBinaryData)");
-                                    return false;
-                                }
-                                break;
-                        }
-                    }
-                    if (rows > 0) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    longValues[i] = new long[rows];
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                case SDDS_LONGDOUBLE:
-                                    doubleValues[i] = new double[rows];
-                                    break;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    stringValues[i] = new String[rows];
-                                    break;
-                            }
-                        }
-                    }
-                    if (columnMajorOrder) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ledis.readShort();
-                                    break;
-                                case SDDS_USHORT:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ((int) (ledis.readShort() & 0xffff));
-                                    break;
-                                case SDDS_LONG:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ledis.readInt();
-                                    break;
-                                case SDDS_ULONG:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ((long) (ledis.readInt() & 0xffffffffL));
-                                    break;
-                                case SDDS_LONG64:
-                                    for (row = 0; row < rows; row++)
-                                        longValues[i][row] = (long) ledis.readLong();
-                                    break;
-                                case SDDS_ULONG64:
-                                    for (row = 0; row < rows; row++) {
-                                        longValues[i][row] = (long) ledis.readLong();
-                                        if (longValues[i][row] < 0)
-                                            longValues[i][row] = 0;
-                                    }
-                                    break;
-                                case SDDS_FLOAT:
-                                    for (row = 0; row < rows; row++)
-                                        doubleValues[i][row] = (double) ledis.readFloat();
-                                    break;
-                                case SDDS_DOUBLE:
-                                    for (row = 0; row < rows; row++)
-                                        doubleValues[i][row] = (double) ledis.readDouble();
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                    for (row = 0; row < rows; row++) {
-                                        size = (int) ledis.readInt();
-                                        buf = new byte[size];
-                                        ledis.readFully(buf, 0, size);
-                                        stringValues[i][row] = new String(buf);
-                                    }
-                                    break;
-                                case SDDS_CHARACTER:
-                                    for (row = 0; row < rows; row++) {
-                                        c[0] = (char) ledis.readByte();
-                                        stringValues[i][row] = new String(c);
-                                    }
-                                    break;
-                            }
-                        }
-                    } else {
-                        for (row = 0; row < rows; row++) {
-                            for (i = 0; i < columnCount; i++) {
-                                switch (colDataTypes[i]) {
-                                    case SDDS_SHORT:
-                                        longValues[i][row] = (long) ledis.readShort();
-                                        break;
-                                    case SDDS_USHORT:
-                                        longValues[i][row] = (long) ((int) (ledis.readShort() & 0xffff));
-                                        break;
-                                    case SDDS_LONG:
-                                        longValues[i][row] = (long) ledis.readInt();
-                                        break;
-                                    case SDDS_ULONG:
-                                        longValues[i][row] = (long) ((long) (ledis.readInt() & 0xffffffffL));
-                                        break;
-                                    case SDDS_LONG64:
-                                        longValues[i][row] = (long) ledis.readLong();
-                                        break;
-                                    case SDDS_ULONG64:
-                                        longValues[i][row] = (long) ledis.readLong();
-                                        if (longValues[i][row] < 0)
-                                            longValues[i][row] = 0;
-                                        break;
-                                    case SDDS_FLOAT:
-                                        doubleValues[i][row] = (double) ledis.readFloat();
-                                        break;
-                                    case SDDS_DOUBLE:
-                                        doubleValues[i][row] = (double) ledis.readDouble();
-                                        break;
-                                    case SDDS_LONGDOUBLE:
-                                        setError("error: longdouble not supported in SDDSJava");
-                                        return false;
-                                    case SDDS_STRING:
-                                        size = (int) ledis.readInt();
-                                        buf = new byte[size];
-                                        ledis.readFully(buf, 0, size);
-                                        stringValues[i][row] = new String(buf);
-                                        break;
-                                    case SDDS_CHARACTER:
-                                        c[0] = (char) ledis.readByte();
-                                        stringValues[i][row] = new String(c);
-                                        break;
-                                }
-                            }
-                        }
-                    }
-                    if (rows > 0) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (colDataTypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    if (!setColumn(i, longValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                    if (!setColumn(i, doubleValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    if (!setColumn(i, stringValues[i], page)) {
-                                        setError("unable to set column data (readBinaryData)");
-                                        return false;
-                                    }
-                                    break;
-                            }
-                        }
-                    }
-                    if (dis.available() == 0)
-                        return true;
-                    page++;
+                    int type = parameterObject[i].getType();
+                    data.parameters[i] = SDDSValues.newArray(type, 1);
+                    SDDSValues.readBinary(in, type, data.parameters[i], 0, bigEndian,
+                            parameterObject[i].getEnumDefinition());
                 }
-            } catch (IOException e) {
-                setError("error reading binary data (readBinaryData)");
+                for (int i = 0; i < arrayCount; i++) {
+                    int type = arrayObject[i].getType();
+                    int[] dim = new int[arrayObject[i].getDimensions()];
+                    for (int j = 0; j < dim.length; j++)
+                        dim[j] = in.readInt();
+                    int elements = arrayElements(dim);
+                    data.dimensions[i] = dim;
+                    data.arrays[i] = SDDSValues.newArray(type, elements);
+                    for (int j = 0; j < elements; j++)
+                        SDDSValues.readBinary(in, type, data.arrays[i], j, bigEndian,
+                                arrayObject[i].getEnumDefinition());
+                }
+                readBinaryColumns(in, data);
+                data.commit(page);
             }
+            return true;
+        } catch (IOException | IllegalArgumentException e) {
+            setError("error reading binary data: " + e.getMessage() + " (readBinaryData)");
+        } catch (OutOfMemoryError e) {
+            setError("not enough memory to read binary data (readBinaryData)");
         }
-        setError("error reading binary data (readBinaryData)");
         return false;
+    }
+
+    private void readBinaryColumns(DataInput in, PageData data) throws IOException {
+        if (columnCount == 0) {
+            data.rows = 0;
+            return;
+        }
+        for (int i = 0; i < columnCount; i++)
+            data.columns[i] = SDDSValues.newArray(columnObject[i].getType(), data.rows);
+        if (columnMajorOrder) {
+            for (int i = 0; i < columnCount; i++) {
+                int type = columnObject[i].getType();
+                SDDSEnumDefinition definition = columnObject[i].getEnumDefinition();
+                for (int row = 0; row < data.rows; row++)
+                    SDDSValues.readBinary(in, type, data.columns[i], row, bigEndian, definition);
+            }
+            return;
+        }
+        int[] types = new int[columnCount];
+        SDDSEnumDefinition[] definitions = new SDDSEnumDefinition[columnCount];
+        for (int i = 0; i < columnCount; i++) {
+            types[i] = columnObject[i].getType();
+            definitions[i] = columnObject[i].getEnumDefinition();
+        }
+        for (int row = 0; row < data.rows; row++) {
+            try {
+                for (int i = 0; i < columnCount; i++)
+                    SDDSValues.readBinary(in, types[i], data.columns[i], row, bigEndian, definitions[i]);
+            } catch (EOFException e) {
+                /* A file being written with a fixed row count may not have reached its count yet. */
+                if (!fixedRowCount)
+                    throw e;
+                data.rows = row;
+                pagesEnded = true;
+                return;
+            }
+        }
     }
 
     /**
@@ -1825,410 +1033,247 @@ public class SDDSFile {
      *         <code>false</code> if an error occurs
      */
     public boolean readAsciiData() {
-        StreamTokenizer st;
-        int par, arr, col, row, page, rows, i, arraySize = 0, c = 0, dimCount = 0;
-        int[] dim;
-        long[][] longValues;
-        double[][] doubleValues;
-        String[][] stringValues;
-        long[] longArrValues;
-        double[] doubleArrValues;
-        String[] stringArrValues;
-        int[] datatypes;
-        int[] parDataTypes;
-        int[] arrDataTypes;
-        boolean endOfPage = true;
-        boolean readyToReadArray = false;
-        boolean moreRows = true;
-        final int quoteChar = 34;
-        boolean skipRead = false;
-        longValues = new long[columnCount][];
-        doubleValues = new double[columnCount][];
-        stringValues = new String[columnCount][];
-        datatypes = new int[columnCount];
-        parDataTypes = new int[parameterCount];
-        arrDataTypes = new int[arrayCount];
-        stringArrValues = new String[arrayCount];
-        longArrValues = new long[arrayCount];
-        doubleArrValues = new double[arrayCount];
-        for (i = 0; i < columnCount; i++) {
-            datatypes[i] = columnObject[i].getType();
-        }
-        for (i = 0; i < parameterCount; i++) {
-            parDataTypes[i] = parameterObject[i].getType();
-        }
-        for (i = 0; i < arrayCount; i++) {
-            arrDataTypes[i] = arrayObject[i].getType();
-        }
-
-        par = col = row = arr = 0;
-        page = 1;
-        rows = -1;
-
+        boolean dataExpected = (columnCount > 0) || (arrayCount > 0);
+        for (int i = 0; (i < parameterCount) && !dataExpected; i++)
+            dataExpected = !parameterObject[i].fixed;
+        pagesEnded = false;
         try {
-            st = new StreamTokenizer(dis);
-            st.resetSyntax();
-            st.whitespaceChars('\u0000', '\u0020');
-            st.commentChar('!');
-            st.quoteChar(34);
-            st.wordChars(35, 255);
-            st.eolIsSignificant(true);
-            st.lowerCaseMode(false);
-            while (true) {
-                if (!skipRead) {
-                    c = st.nextToken();
-                    if (c == StreamTokenizer.TT_EOF) {
-                        if (endOfPage) {
-                            return true;
-                        }
-                        setError("unexpected end of file (readAsciiData)");
-                        break;
-                    } else if (c == StreamTokenizer.TT_EOL) {
-                        continue;
-                    }
+            for (int i = 0; i < additionalHeaderLines; i++) {
+                if (nextLine(dis) == null)
+                    return true;
+            }
+            for (int page = 1; !pagesEnded; page++) {
+                /* With only fixed values there is no page data, and just one page. */
+                if (!dataExpected && (page != 1))
+                    return true;
+                PageData data = new PageData();
+                if (!readAsciiParameters(data) || !readAsciiArrays(data) || !readAsciiColumns(data, page))
+                    return true;
+                data.commit(page);
+            }
+            return true;
+        } catch (IOException | IllegalArgumentException e) {
+            setError(e.getMessage() + " (readAsciiData)");
+        } catch (OutOfMemoryError e) {
+            setError("not enough memory to read ascii data (readAsciiData)");
+        }
+        return false;
+    }
+
+    /** A fixed value that cannot be read makes every page that uses it unreadable. */
+    private void checkFixedValue(int index) throws IOException {
+        if (!parameterObject[index].isValidFixedValue())
+            throw new IOException("Unable to read page--invalid fixed value for parameter "
+                    + parameterObject[index].getName());
+    }
+
+    /** @return <code>false</code> if the data ended before the first value */
+    private boolean readAsciiParameters(PageData data) throws IOException {
+        boolean firstRead = true;
+        for (int i = 0; i < parameterCount; i++) {
+            if (parameterObject[i].fixed) {
+                checkFixedValue(i);
+                continue;
+            }
+            String line = nextLine(dis);
+            if (line == null) {
+                if (firstRead)
+                    return false;
+                throw new IOException("Unable to read parameters--data ends prematurely");
+            }
+            firstRead = false;
+            int n = line.length();
+            if (line.charAt(n - 1) == '\n')
+                line = line.substring(0, n - 1);
+            int type = parameterObject[i].getType();
+            data.parameters[i] = SDDSValues.newArray(type, 1);
+            try {
+                if (type == SDDS_STRING) {
+                    /* A string parameter is the whole line unless it starts with a quote. */
+                    if (line.endsWith("\r"))
+                        line = line.substring(0, line.length() - 1);
+                    String text = line.startsWith("\"") ? SDDSText.nextToken(line, new int[] { 0 }) : line;
+                    SDDSValues.scan(type, text == null ? "" : text, data.parameters[i], 0, null);
                 } else {
-                    skipRead = false;
+                    String token = SDDSText.nextToken(line, new int[] { 0 });
+                    if (token == null)
+                        throw new NumberFormatException("no value");
+                    SDDSValues.scan(type, token, data.parameters[i], 0, parameterObject[i].getEnumDefinition());
                 }
-                endOfPage = false;
-                if (par < parameterCount) {
-                    if (parameterObject[par].fixed) {
-                        skipRead = true;
-                    } else {
-                        if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                            setError("invalid parameter value at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                        switch (parDataTypes[par]) {
-                            case SDDS_STRING:
-                                if (!setParameter(par, SDDSUtil.removeBackSlashes(st.sval), page)) {
-                                    setError("unable to set parameter at line #" + st.lineno() + " (readAsciiData)");
-                                    return false;
-                                }
-                                break;
-                            case SDDS_CHARACTER:
-                                if (!setParameter(par, SDDSUtil.returnCharValueFromOctalCode(st.sval), page)) {
-                                    setError("unable to set parameter at line #" + st.lineno() + " (readAsciiData)");
-                                    return false;
-                                }
-                                break;
-                            default:
-                                if (!setParameter(par, st.sval, page)) {
-                                    setError("unable to set parameter at line #" + st.lineno() + " (readAsciiData)");
-                                    return false;
-                                }
-                                break;
-                        }
-                    }
-                    par++;
-                } else if (arr < arrayCount && !readyToReadArray) {
-                    arraySize = 0;
-                    dim = new int[getArrayDimensions(arr)];
-                    while (getArrayDimensions(arr) != dimCount) {
-                        if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                            setError("invalid array data at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                        try {
-                            dim[dimCount] = Integer.valueOf(st.sval).intValue();
-                        } catch (Exception e) {
-                            setError("invalid array size at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                        dimCount++;
-                        if (getArrayDimensions(arr) != dimCount)
-                            c = st.nextToken();
-                    }
-                    arraySize = dim[0];
-                    for (i = 1; i < dimCount; i++) {
-                        arraySize *= dim[i];
-                    }
-                    setArrayDim(page, arr, dim);
-                    dimCount = 0;
-                    if (arraySize > 0) {
-                        switch (arrDataTypes[arr]) {
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                longArrValues = new long[arraySize];
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                            case SDDS_LONGDOUBLE:
-                                doubleArrValues = new double[arraySize];
-                                break;
-                            case SDDS_STRING:
-                            case SDDS_CHARACTER:
-                                stringArrValues = new String[arraySize];
-                                break;
-                        }
-                    }
-                    readyToReadArray = true;
-                } else if (readyToReadArray) {
-                    readyToReadArray = false;
-                    for (i = 0; i < arraySize; i++) {
-                        if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                            setError("invalid array element at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                        switch (arrDataTypes[arr]) {
-                            case SDDS_STRING:
-                                stringArrValues[i] = SDDSUtil.removeBackSlashes(st.sval);
-                                break;
-                            case SDDS_CHARACTER:
-                                stringArrValues[i] = String.valueOf(SDDSUtil.returnCharValueFromOctalCode(st.sval));
-                                break;
-                            case SDDS_SHORT:
-                            case SDDS_USHORT:
-                            case SDDS_LONG:
-                            case SDDS_ULONG:
-                            case SDDS_LONG64:
-                            case SDDS_ULONG64:
-                                longArrValues[i] = (Long.valueOf(st.sval)).longValue();
-                                break;
-                            case SDDS_FLOAT:
-                            case SDDS_DOUBLE:
-                                doubleArrValues[i] = (Double.valueOf(st.sval)).doubleValue();
-                                break;
-                            case SDDS_LONGDOUBLE:
-                                setError("error: longdouble not supported in SDDSJava");
-                                return false;
-                        }
-                        if (i < arraySize - 1)
-                            c = st.nextToken();
-                        while (c == StreamTokenizer.TT_EOL)
-                            c = st.nextToken();
-                        if (c == StreamTokenizer.TT_EOF) {
-                            setError("unexpected end of file (readAsciiData)");
-                            return false;
-                        }
-                    }
-                    switch (arrDataTypes[arr]) {
-                        case SDDS_STRING:
-                        case SDDS_CHARACTER:
-                            if (!setArray(arr, stringArrValues, page)) {
-                                setError("unable to set array (readAsciiData)");
-                                return false;
-                            }
-                            break;
-                        case SDDS_SHORT:
-                        case SDDS_USHORT:
-                        case SDDS_LONG:
-                        case SDDS_ULONG:
-                        case SDDS_LONG64:
-                        case SDDS_ULONG64:
-                            if (!setArray(arr, longArrValues, page)) {
-                                setError("unable to set array (readAsciiData)");
-                                return false;
-                            }
-                            break;
-                        case SDDS_FLOAT:
-                        case SDDS_DOUBLE:
-                            if (!setArray(arr, doubleArrValues, page)) {
-                                setError("unable to set array (readAsciiData)");
-                                return false;
-                            }
-                            break;
-                        case SDDS_LONGDOUBLE:
-                            setError("error: longdouble not supported in SDDSJava");
-                            return false;
-                    }
-                    arr++;
-                } else if ((rows == -1) && (columnCount > 0)) {
-                    if (!noRowCount) {
-                        if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                            setError("invalid row value at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                        try {
-                            rows = Integer.valueOf(st.sval).intValue();
-                        } catch (Exception e) {
-                            setError("invalid row value at line #" + st.lineno() + " (readAsciiData)");
-                            return false;
-                        }
-                    }
-                    if ((rows > 0) || noRowCount) {
-                        if (noRowCount) {
-                            rows = 1;
-                            skipRead = true;
-                        }
-                        for (i = 0; i < columnCount; i++) {
-                            switch (datatypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    longValues[i] = new long[rows];
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                case SDDS_LONGDOUBLE:
-                                    doubleValues[i] = new double[rows];
-                                    break;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    stringValues[i] = new String[rows];
-                                    break;
-                            }
-                        }
-                    }
-                } else if (columnCount > 0) {
-                    while ((row < rows) || (noRowCount && moreRows)) {
-                        while (col < columnCount) {
-                            if (noRowCount && (c == StreamTokenizer.TT_EOF)) {
-                                moreRows = false;
-                                rows--;
-                                break;
-                            } else if (noRowCount && (c == StreamTokenizer.TT_EOL)) {
-                                moreRows = false;
-                                rows--;
-                                c = st.nextToken();
-                                if (c != StreamTokenizer.TT_EOF) {
-                                    skipRead = true;
-                                }
-                                break;
-                            } else if ((c != StreamTokenizer.TT_WORD) && (c != quoteChar)) {
-                                setError("invalid column element at line #" + st.lineno() + " (readAsciiData)");
-                                return false;
-                            }
-                            switch (datatypes[col]) {
-                                case SDDS_STRING:
-                                    if (noRowCount && row >= Array.getLength(stringValues[col]))
-                                        stringValues[col] = (String[]) SDDSUtil.resize(stringValues[col], row + 1);
-                                    stringValues[col][row] = SDDSUtil.removeBackSlashes(st.sval);
-                                    break;
-                                case SDDS_CHARACTER:
-                                    if (noRowCount && row >= Array.getLength(stringValues[col]))
-                                        stringValues[col] = (String[]) SDDSUtil.resize(stringValues[col], row + 1);
-                                    stringValues[col][row] = String
-                                            .valueOf(SDDSUtil.returnCharValueFromOctalCode(st.sval));
-                                    break;
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    if (noRowCount && row >= Array.getLength(longValues[col]))
-                                        longValues[col] = (long[]) SDDSUtil.resize(longValues[col], row + 1);
-                                    longValues[col][row] = (Long.valueOf(st.sval)).longValue();
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                    if (noRowCount && row >= Array.getLength(doubleValues[col]))
-                                        doubleValues[col] = (double[]) SDDSUtil.resize(doubleValues[col], row + 1);
-                                    doubleValues[col][row] = (Double.valueOf(st.sval)).doubleValue();
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                            }
-                            col++;
-                            if (col == columnCount) {
-                                if (!noRowCount)
-                                    row++;
-                                c = st.nextToken();
-                                while (c != StreamTokenizer.TT_EOL) {
-                                    if (c == StreamTokenizer.TT_EOF) {
-                                        if ((row == rows) || noRowCount)
-                                            break;
-                                        setError("unexpected end of file (readAsciiData)");
-                                        return false;
-                                    }
-                                    c = st.nextToken();
-                                }
-                                if (row < rows) {
-                                    col = 0;
-                                    c = st.nextToken();
-                                }
-                                break;
-                            }
-                            c = st.nextToken();
-                            while (c == StreamTokenizer.TT_EOL)
-                                c = st.nextToken();
-                            if (c == StreamTokenizer.TT_EOF) {
-                                setError("unexpected end of file (readAsciiData)");
-                                return false;
-                            }
-                        }
-                        if (noRowCount && moreRows) {
-                            row++;
-                            rows++;
-                        }
-                    }
-                }
-                if ((par == parameterCount) &&
-                        ((col == columnCount) || (rows == 0)) &&
-                        ((columnCount == 0) || (row == rows)) &&
-                        (arr == arrayCount) || (noRowCount && !moreRows)) {
-                    par = col = row = arr = 0;
-                    endOfPage = true;
-                    moreRows = true;
-                }
-                if (endOfPage) {
-                    if (rows > 0) {
-                        for (i = 0; i < columnCount; i++) {
-                            switch (datatypes[i]) {
-                                case SDDS_SHORT:
-                                case SDDS_USHORT:
-                                case SDDS_LONG:
-                                case SDDS_ULONG:
-                                case SDDS_LONG64:
-                                case SDDS_ULONG64:
-                                    if (!setColumn(i, longValues[i], page)) {
-                                        setError("unable to set column (readAsciiData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_FLOAT:
-                                case SDDS_DOUBLE:
-                                    if (!setColumn(i, doubleValues[i], page)) {
-                                        setError("unable to set column (readAsciiData)");
-                                        return false;
-                                    }
-                                    break;
-                                case SDDS_LONGDOUBLE:
-                                    setError("error: longdouble not supported in SDDSJava");
-                                    return false;
-                                case SDDS_STRING:
-                                case SDDS_CHARACTER:
-                                    if (!setColumn(i, stringValues[i], page)) {
-                                        setError("unable to set column (readAsciiData)");
-                                        return false;
-                                    }
-                                    break;
-                            }
-                        }
-                    } else {
-                        makeBlankPages(page);
-                    }
-                    rows = -1;
-                    page++;
-                }
-                if (!skipRead) {
-                    c = st.nextToken();
-                    while (c != StreamTokenizer.TT_EOL) {
-                        if (c == StreamTokenizer.TT_EOF) {
-                            if (endOfPage) {
-                                return true;
-                            }
-                            setError("unexpected end of file (readAsciiData)");
-                            return false;
-                        }
-                        c = st.nextToken();
-                    }
+            } catch (IllegalArgumentException e) {
+                throw new IOException("Unable to read page--parameter scanning error for "
+                        + parameterObject[i].getName() + ": " + e.getMessage());
+            }
+        }
+        return true;
+    }
+
+    /** Scan one value of a column or an array from a line of text. */
+    private void scanAsciiValue(int type, int fieldLength, String line, int[] cursor, Object data, int index,
+            SDDSEnumDefinition definition) {
+        String token;
+        if (fieldLength != 0) {
+            int size = Math.abs(fieldLength);
+            int end = Math.min(cursor[0] + size, line.length());
+            token = line.substring(cursor[0], end);
+            cursor[0] = end;
+            if ((type == SDDS_STRING) && (fieldLength < 0))
+                token = SDDSText.removePadding(token);
+        } else {
+            token = SDDSText.nextToken(line, cursor);
+            if (token == null)
+                throw new NumberFormatException("tokenizing error");
+        }
+        SDDSValues.scan(type, token, data, index, definition);
+    }
+
+    /** @return <code>false</code> if the data ended before the first array */
+    private boolean readAsciiArrays(PageData data) throws IOException {
+        for (int i = 0; i < arrayCount; i++) {
+            String line = nextLine(dis);
+            if ((line == null) || SDDSText.isBlank(line, 0)) {
+                if (i == 0)
+                    return false;
+                throw new IOException("Unable to read array--dimensions missing");
+            }
+            int[] dim = new int[arrayObject[i].getDimensions()];
+            int[] cursor = { 0 };
+            for (int j = 0; j < dim.length; j++) {
+                String token = SDDSText.nextToken(line, cursor);
+                try {
+                    if ((token == null) || token.isEmpty())
+                        throw new NumberFormatException("no value");
+                    dim[j] = (int) SDDSText.scanLong(token);
+                } catch (NumberFormatException e) {
+                    throw new IOException("Unable to read array--dimensions missing or negative");
                 }
             }
-        } catch (Exception e) {
-            setError("problem reading ascii data (readAsciiData)");
-            return false;
+            int elements = arrayElements(dim);
+            int type = arrayObject[i].getType();
+            int fieldLength = arrayObject[i].getField_Length();
+            SDDSEnumDefinition definition = arrayObject[i].getEnumDefinition();
+            Object values = SDDSValues.newArray(type, elements);
+            data.dimensions[i] = dim;
+            data.arrays[i] = values;
+            int j = 0;
+            while (j < elements) {
+                line = nextLine(dis);
+                if ((line == null) || SDDSText.isBlank(line, 0))
+                    throw new IOException("Unable to read array--data ends prematurely");
+                cursor[0] = 0;
+                try {
+                    do {
+                        scanAsciiValue(type, fieldLength, line, cursor, values, j, definition);
+                    } while ((++j < elements) && !SDDSText.isBlank(line, cursor[0]));
+                } catch (IllegalArgumentException e) {
+                    throw new IOException("Unable to read array " + arrayObject[i].getName()
+                            + "--error scanning data element: " + e.getMessage());
+                }
+            }
         }
-        setError("problem reading ascii data (readAsciiData)");
-        return false;
+        return true;
+    }
+
+    /** @return <code>false</code> if the data ended and this page does not exist */
+    private boolean readAsciiColumns(PageData data, int page) throws IOException {
+        if (columnCount == 0)
+            return true;
+        long rowLimit = -1;
+        if (!noRowCount) {
+            String s;
+            do {
+                s = SDDSText.readRawLine(dis);
+                if (s == null)
+                    return false;
+            } while (s.charAt(0) == '!');
+            try {
+                rowLimit = SDDSText.scanLong(s);
+            } catch (NumberFormatException e) {
+                rowLimit = -1;
+            }
+            if (rowLimit < 0)
+                throw new IOException("Unable to read page--file has no (valid) number-of-rows entry");
+            if (rowLimit > ARRAY_SIZE_LIMIT)
+                throw new IOException("Row count exceeds limit in Java SDDS");
+            if (rowLimit == 0)
+                return true;
+        }
+        int capacity = rowLimit < 0 ? 64 : (int) Math.min(rowLimit, 65536);
+        int[] types = new int[columnCount];
+        int[] fieldLengths = new int[columnCount];
+        SDDSEnumDefinition[] definitions = new SDDSEnumDefinition[columnCount];
+        for (int i = 0; i < columnCount; i++) {
+            types[i] = columnObject[i].getType();
+            fieldLengths[i] = columnObject[i].getField_Length();
+            definitions[i] = columnObject[i].getEnumDefinition();
+            data.columns[i] = SDDSValues.newArray(types[i], capacity);
+        }
+        String line = "";
+        int[] cursor = { 0 };
+        int row = 0;
+        boolean endOfData = false, dataRead = false;
+        do {
+            if (row >= capacity) {
+                capacity = (int) Math.min(2L * capacity, ARRAY_SIZE_LIMIT);
+                for (int i = 0; i < columnCount; i++)
+                    data.columns[i] = SDDSValues.copyOf(data.columns[i], capacity);
+            }
+            int lineCount = 0;
+            dataRead = false;
+            for (int i = 0; i < columnCount; i++) {
+                if (SDDSText.isBlank(line, cursor[0])) {
+                    line = nextLine(dis);
+                    dataRead = line != null;
+                    cursor[0] = 0;
+                    if ((line == null) || SDDSText.isBlank(line, 0)) {
+                        if (noRowCount) {
+                            endOfData = true;
+                            break;
+                        }
+                        /* A file being written with a fixed row count may be incomplete. */
+                        if (fixedRowCount) {
+                            data.rows = row;
+                            pagesEnded = true;
+                            return true;
+                        }
+                        throw new IOException("Unable to read page--data ends prematurely");
+                    }
+                    lineCount++;
+                }
+                try {
+                    scanAsciiValue(types[i], fieldLengths[i], line, cursor, data.columns[i], row, definitions[i]);
+                } catch (IllegalArgumentException e) {
+                    if ((types[i] != SDDS_ENUM) && fixedRowCount) {
+                        data.rows = row;
+                        pagesEnded = true;
+                        return true;
+                    }
+                    throw new IOException("Unable to read page--scanning error in column "
+                            + columnObject[i].getName() + " at row " + (row + 1) + ": " + e.getMessage());
+                }
+            }
+            if (endOfData)
+                break;
+            if ((linesPerRow != 0) && (lineCount != linesPerRow)) {
+                if (fixedRowCount) {
+                    data.rows = row;
+                    pagesEnded = true;
+                    return true;
+                }
+                throw new IOException("Unable to read page--line layout error at line " + (row + 1) + " of page "
+                        + page);
+            }
+            if (linesPerRow != 0) {
+                line = "";
+                cursor[0] = 0;
+            }
+            row++;
+        } while (noRowCount || (row < rowLimit));
+        /* End of file does not make an empty page after the first when there are no row counts. */
+        if (endOfData && (page != 1) && (row == 0) && !dataRead)
+            return false;
+        data.rows = row;
+        return true;
     }
 
     /**
@@ -2306,6 +1351,7 @@ public class SDDSFile {
      *         <code>false</code> if error occurs
      */
     public boolean closeOutput() {
+        layoutWritten = false;
         try {
             dos.close();
         } catch (Exception e) {
@@ -2325,6 +1371,8 @@ public class SDDSFile {
     public boolean closeInput() {
         try {
             dis.close();
+            if (isURL)
+                is = null;
         } catch (IOException e) {
             setError("problem closing input file (closeInput)");
             return false;
@@ -2418,6 +1466,8 @@ public class SDDSFile {
         i = getParameterIndex(oldname);
         if (i == -1)
             return;
+        if (!newNameAllowed(newname, indexInUse(parameterObject, parameterCount, newname), i, "renameParameter"))
+            return;
         parameterObject[i].setName(newname);
     }
 
@@ -2431,6 +1481,8 @@ public class SDDSFile {
         int i;
         i = getArrayIndex(oldname);
         if (i == -1)
+            return;
+        if (!newNameAllowed(newname, indexInUse(arrayObject, arrayCount, newname), i, "renameArray"))
             return;
         arrayObject[i].setName(newname);
     }
@@ -2446,7 +1498,43 @@ public class SDDSFile {
         i = getColumnIndex(oldname);
         if (i == -1)
             return;
+        if (!newNameAllowed(newname, indexInUse(columnObject, columnCount, newname), i, "renameColumn"))
+            return;
         columnObject[i].setName(newname);
+    }
+
+    /** Returns the index of an element by name, without recording an error if there is none. */
+    private static int indexInUse(Object[] elements, int count, String name) {
+        for (int i = 0; i < count; i++) {
+            String existing = elements[i] instanceof SDDSParameter ? ((SDDSParameter) elements[i]).getName()
+                    : elements[i] instanceof SDDSArray ? ((SDDSArray) elements[i]).getName()
+                            : ((SDDSColumn) elements[i]).getName();
+            if (name.equals(existing))
+                return i;
+        }
+        return -1;
+    }
+
+    /** Check a new name, which the file could not be read back with if invalid or in use. */
+    private boolean newNameAllowed(String name, int existing, int index, String caller) {
+        if (!SDDSUtil.isValidName(name)) {
+            setError("The name \"" + name + "\" is invalid (" + caller + ")");
+            return false;
+        }
+        if ((existing != -1) && (existing != index)) {
+            setError("The name \"" + name + "\" is already in use (" + caller + ")");
+            return false;
+        }
+        return true;
+    }
+
+    /** Check a format for its type, which the file could not be read back with if invalid. */
+    private boolean formatAllowed(String format, int type, String caller) {
+        if ((SDDSNamelist.blankToNull(format) != null) && !SDDSUtil.verifyPrintfFormat(format, type)) {
+            setError("Invalid format string (" + caller + ")");
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -2566,7 +1654,13 @@ public class SDDSFile {
     public void setColumnFormatString(int index, String format_string) {
         if ((index < 0) || (index >= columnCount))
             return;
-        columnObject[index].setFormat_String(format_string);
+        if (!formatAllowed(format_string, columnObject[index].getType(), "setColumnFormatString"))
+            return;
+        try {
+            columnObject[index].setFormat_String(format_string);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumnInformation)");
+        }
     }
 
     /**
@@ -2578,7 +1672,13 @@ public class SDDSFile {
     public void setArrayFormatString(int index, String format_string) {
         if ((index < 0) || (index >= arrayCount))
             return;
-        arrayObject[index].setFormat_String(format_string);
+        if (!formatAllowed(format_string, arrayObject[index].getType(), "setArrayFormatString"))
+            return;
+        try {
+            arrayObject[index].setFormat_String(format_string);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArrayInformation)");
+        }
     }
 
     /**
@@ -2590,7 +1690,13 @@ public class SDDSFile {
     public void setParameterFormatString(int index, String format_string) {
         if ((index < 0) || (index >= parameterCount))
             return;
-        parameterObject[index].setFormat_String(format_string);
+        if (!formatAllowed(format_string, parameterObject[index].getType(), "setParameterFormatString"))
+            return;
+        try {
+            parameterObject[index].setFormat_String(format_string);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameterInformation)");
+        }
     }
 
     /**
@@ -2614,7 +1720,11 @@ public class SDDSFile {
     public void setColumnFieldLength(int index, int field_length) {
         if ((index < 0) || (index >= columnCount))
             return;
-        columnObject[index].setField_Length(field_length);
+        try {
+            columnObject[index].setField_Length(field_length);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumnInformation)");
+        }
     }
 
     /**
@@ -2626,7 +1736,11 @@ public class SDDSFile {
     public void setArrayFieldLength(int index, int field_length) {
         if ((index < 0) || (index >= arrayCount))
             return;
-        arrayObject[index].setField_Length(field_length);
+        try {
+            arrayObject[index].setField_Length(field_length);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArrayInformation)");
+        }
     }
 
     /**
@@ -2638,7 +1752,11 @@ public class SDDSFile {
     public void setParameterFixedValue(int index, String fixed_value) {
         if ((index < 0) || (index >= parameterCount))
             return;
-        parameterObject[index].setFixed_Value(fixed_value);
+        try {
+            parameterObject[index].setFixed_Value(fixed_value);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameterInformation)");
+        }
     }
 
     /**
@@ -3347,8 +2465,14 @@ public class SDDSFile {
             setError("NULL name not allowed for parameter definition (defineParameter)");
             return -1;
         }
-        if (!SDDSUtil.isValidName(name))
+        if (!SDDSUtil.isValidName(name)) {
+            setError("The following parameter name is invalid: >" + name + "< (defineParameter)");
             return -1;
+        }
+        if ((type == SDDS_ENUM) && !definingEnum) {
+            setError("Use defineEnumColumn/Parameter/Array to supply an enum dictionary (defineParameter)");
+            return -1;
+        }
         for (j = 0; j < parameterCount; j++) {
             if (name.compareTo(parameterObject[j].getName()) == 0) {
                 setError("Parameter " + name + " already exists (defineParameter)");
@@ -3359,6 +2483,7 @@ public class SDDSFile {
             setError("Unknown data type (defineParameter)");
             return -1;
         }
+        format_string = SDDSNamelist.blankToNull(format_string);
         if (format_string != null) {
             if (!SDDSUtil.verifyPrintfFormat(format_string, type)) {
                 setError("Invalid format string (defineParameter)");
@@ -3675,8 +2800,14 @@ public class SDDSFile {
             setError("NULL name not allowed for array definition (defineArray)");
             return -1;
         }
-        if (!SDDSUtil.isValidName(name))
+        if (!SDDSUtil.isValidName(name)) {
+            setError("The following array name is invalid: >" + name + "< (defineArray)");
             return -1;
+        }
+        if ((type == SDDS_ENUM) && !definingEnum) {
+            setError("Use defineEnumColumn/Parameter/Array to supply an enum dictionary (defineArray)");
+            return -1;
+        }
         for (j = 0; j < arrayCount; j++) {
             if (name.compareTo(arrayObject[j].getName()) == 0) {
                 setError("Array " + name + " already exists (defineArray)");
@@ -3687,6 +2818,7 @@ public class SDDSFile {
             setError("Unknown data type (defineArray)");
             return -1;
         }
+        format_string = SDDSNamelist.blankToNull(format_string);
         if (format_string != null) {
             if (!SDDSUtil.verifyPrintfFormat(format_string, type)) {
                 setError("Invalid format string (defineArray)");
@@ -3697,7 +2829,7 @@ public class SDDSFile {
             setError("Invalid field length (defineArray)");
             return -1;
         }
-        if (dimensions < 0) {
+        if (dimensions <= 0) {
             setError("Invalid dimensions value (defineArray)");
             return -1;
         }
@@ -4020,8 +3152,14 @@ public class SDDSFile {
             setError("NULL name not allowed for column definition (defineColumn)");
             return -1;
         }
-        if (!SDDSUtil.isValidName(name))
+        if (!SDDSUtil.isValidName(name)) {
+            setError("The following column name is invalid: >" + name + "< (defineColumn)");
             return -1;
+        }
+        if ((type == SDDS_ENUM) && !definingEnum) {
+            setError("Use defineEnumColumn/Parameter/Array to supply an enum dictionary (defineColumn)");
+            return -1;
+        }
         for (j = 0; j < columnCount; j++) {
             if (name.compareTo(columnObject[j].getName()) == 0) {
                 setError("Column " + name + " already exists (defineColumn)");
@@ -4032,6 +3170,7 @@ public class SDDSFile {
             setError("Unknown data type (defineColumn)");
             return -1;
         }
+        format_string = SDDSNamelist.blankToNull(format_string);
         if (format_string != null) {
             if (!SDDSUtil.verifyPrintfFormat(format_string, type)) {
                 setError("Invalid format string (defineColumn)");
@@ -4315,6 +3454,671 @@ public class SDDSFile {
     }
 
     /**
+     * Creates a new enum column. Its values are signed 32-bit codes with labels from a
+     * required dictionary.
+     *
+     * @param name          should be a valid name as defined by
+     *                      SDDSUtil.isValidName
+     * @param symbol        may be <code>null</code>
+     * @param units         may be <code>null</code>
+     * @param description   may be <code>null</code>
+     * @param format_string must be <code>null</code> or blank
+     * @param enum_values   logical mapping, such as
+     *                      <code>0:OFF,10:ON,-1:FAULT</code>
+     * @param field_length  must be <code>0</code>
+     * @return index of the column<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumColumn(String name, String symbol, String units, String description, String format_string,
+            String enum_values, int field_length) {
+        if (layoutWritten || (field_length != 0) || (SDDSNamelist.blankToNull(format_string) != null)) {
+            setError("Enum definitions require a fresh layout, zero field_length and no format_string (defineEnumColumn)");
+            return -1;
+        }
+        SDDSEnumDefinition definition = parseMapping(enum_values, "defineEnumColumn");
+        if (definition == null)
+            return -1;
+        definingEnum = true;
+        int index = defineColumn(name, symbol, units, description, null, SDDS_ENUM, 0);
+        definingEnum = false;
+        if (index != -1)
+            columnObject[index].setEnumDefinition(definition);
+        return index;
+    }
+
+    /**
+     * Creates a new enum column.
+     *
+     * @param name        should be a valid name as defined by SDDSUtil.isValidName
+     * @param enum_values logical mapping, such as <code>0:OFF,10:ON,-1:FAULT</code>
+     * @return index of the column<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumColumn(String name, String enum_values) {
+        return defineEnumColumn(name, null, null, null, null, enum_values, 0);
+    }
+
+    /**
+     * Creates a new enum parameter.
+     *
+     * @param name          should be a valid name as defined by
+     *                      SDDSUtil.isValidName
+     * @param symbol        may be <code>null</code>
+     * @param units         may be <code>null</code>
+     * @param description   may be <code>null</code>
+     * @param format_string must be <code>null</code> or blank
+     * @param enum_values   logical mapping, such as
+     *                      <code>0:OFF,10:ON,-1:FAULT</code>
+     * @param fixed_value   <code>null</code>, or a complete decimal code from the
+     *                      mapping
+     * @return index of the parameter<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumParameter(String name, String symbol, String units, String description, String format_string,
+            String enum_values, String fixed_value) {
+        if (layoutWritten || (SDDSNamelist.blankToNull(format_string) != null)) {
+            setError("Enum parameter definitions require a fresh layout and no format_string (defineEnumParameter)");
+            return -1;
+        }
+        SDDSEnumDefinition definition = parseMapping(enum_values, "defineEnumParameter");
+        if (definition == null)
+            return -1;
+        if (fixed_value != null) {
+            Integer code = SDDSEnumDefinition.parseCode(fixed_value);
+            if ((code == null) || !definition.hasCode(code.intValue())) {
+                setError("Invalid fixed enum parameter code (defineEnumParameter)");
+                return -1;
+            }
+        }
+        definingEnum = true;
+        int index = defineParameter(name, symbol, units, description, null, SDDS_ENUM, fixed_value);
+        definingEnum = false;
+        if (index != -1)
+            parameterObject[index].setEnumDefinition(definition);
+        return index;
+    }
+
+    /**
+     * Creates a new enum parameter.
+     *
+     * @param name        should be a valid name as defined by SDDSUtil.isValidName
+     * @param enum_values logical mapping, such as <code>0:OFF,10:ON,-1:FAULT</code>
+     * @return index of the parameter<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumParameter(String name, String enum_values) {
+        return defineEnumParameter(name, null, null, null, null, enum_values, null);
+    }
+
+    /**
+     * Creates a new enum array.
+     *
+     * @param name          should be a valid name as defined by
+     *                      SDDSUtil.isValidName
+     * @param symbol        may be <code>null</code>
+     * @param units         may be <code>null</code>
+     * @param description   may be <code>null</code>
+     * @param format_string must be <code>null</code> or blank
+     * @param group_name    may be <code>null</code>
+     * @param enum_values   logical mapping, such as
+     *                      <code>0:OFF,10:ON,-1:FAULT</code>
+     * @param field_length  must be <code>0</code>
+     * @param dimensions    number of dimensions
+     * @return index of the array<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumArray(String name, String symbol, String units, String description, String format_string,
+            String group_name, String enum_values, int field_length, int dimensions) {
+        if (layoutWritten || (field_length != 0) || (SDDSNamelist.blankToNull(format_string) != null)) {
+            setError("Enum array definitions require a fresh layout, zero field_length and no format_string (defineEnumArray)");
+            return -1;
+        }
+        SDDSEnumDefinition definition = parseMapping(enum_values, "defineEnumArray");
+        if (definition == null)
+            return -1;
+        definingEnum = true;
+        int index = defineArray(name, symbol, units, description, null, group_name, SDDS_ENUM, 0, dimensions);
+        definingEnum = false;
+        if (index != -1)
+            arrayObject[index].setEnumDefinition(definition);
+        return index;
+    }
+
+    /**
+     * Creates a new enum array.
+     *
+     * @param name        should be a valid name as defined by SDDSUtil.isValidName
+     * @param enum_values logical mapping, such as <code>0:OFF,10:ON,-1:FAULT</code>
+     * @param dimensions  number of dimensions
+     * @return index of the array<br>
+     *         <code>-1</code> if an error occurs
+     */
+    public int defineEnumArray(String name, String enum_values, int dimensions) {
+        return defineEnumArray(name, null, null, null, null, null, enum_values, 0, dimensions);
+    }
+
+    private SDDSEnumDefinition parseMapping(String enum_values, String caller) {
+        try {
+            return new SDDSEnumDefinition(enum_values);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (" + caller + ")");
+            return null;
+        }
+    }
+
+    /** Returns the canonical mapping of a column, or <code>null</code> if it is not an enum. */
+    public String getColumnEnumValues(int index) {
+        SDDSEnumDefinition definition = getColumnEnumDefinition(index);
+        return definition == null ? null : definition.getValues();
+    }
+
+    /** Returns the canonical mapping of a parameter, or <code>null</code> if it is not an enum. */
+    public String getParameterEnumValues(int index) {
+        SDDSEnumDefinition definition = getParameterEnumDefinition(index);
+        return definition == null ? null : definition.getValues();
+    }
+
+    /** Returns the canonical mapping of an array, or <code>null</code> if it is not an enum. */
+    public String getArrayEnumValues(int index) {
+        SDDSEnumDefinition definition = getArrayEnumDefinition(index);
+        return definition == null ? null : definition.getValues();
+    }
+
+    /** Returns the dictionary of a column, or <code>null</code> if it is not an enum. */
+    public SDDSEnumDefinition getColumnEnumDefinition(int index) {
+        return ((index < 0) || (index >= columnCount)) ? null : columnObject[index].getEnumDefinition();
+    }
+
+    /** Returns the dictionary of a parameter, or <code>null</code> if it is not an enum. */
+    public SDDSEnumDefinition getParameterEnumDefinition(int index) {
+        return ((index < 0) || (index >= parameterCount)) ? null : parameterObject[index].getEnumDefinition();
+    }
+
+    /** Returns the dictionary of an array, or <code>null</code> if it is not an enum. */
+    public SDDSEnumDefinition getArrayEnumDefinition(int index) {
+        return ((index < 0) || (index >= arrayCount)) ? null : arrayObject[index].getEnumDefinition();
+    }
+
+    /**
+     * Returns the codes of an enum column on a page.
+     *
+     * @param index index of the column
+     * @param page  page of the data
+     * @return the codes, or <code>null</code> if it is not an enum or the page has no
+     *         data
+     */
+    public int[] getColumnEnumCodes(int index, int page) {
+        return ((index < 0) || (index >= columnCount)) ? null : columnObject[index].getEnumCodes(page);
+    }
+
+    /**
+     * Returns the labels of an enum column on a page.
+     *
+     * @param index index of the column
+     * @param page  page of the data
+     * @return the labels, or <code>null</code> if it is not an enum or the page has no
+     *         data
+     */
+    public String[] getColumnEnumLabels(int index, int page) {
+        return ((index < 0) || (index >= columnCount)) ? null : columnObject[index].getEnumLabels(page);
+    }
+
+    /**
+     * Returns the codes of an enum array on a page.
+     *
+     * @param index index of the array
+     * @param page  page of the data
+     * @return the codes, or <code>null</code> if it is not an enum or the page has no
+     *         data
+     */
+    public int[] getArrayEnumCodes(int index, int page) {
+        return ((index < 0) || (index >= arrayCount)) ? null : arrayObject[index].getEnumCodes(page);
+    }
+
+    /**
+     * Returns the labels of an enum array on a page.
+     *
+     * @param index index of the array
+     * @param page  page of the data
+     * @return the labels, or <code>null</code> if it is not an enum or the page has no
+     *         data
+     */
+    public String[] getArrayEnumLabels(int index, int page) {
+        return ((index < 0) || (index >= arrayCount)) ? null : arrayObject[index].getEnumLabels(page);
+    }
+
+    /**
+     * Returns the code of an enum parameter on a page.
+     *
+     * @param index index of the parameter
+     * @param page  page of the data
+     * @return the code, or <code>null</code> if it is not an enum or has no value
+     */
+    public Integer getParameterEnumCode(int index, int page) {
+        return ((index < 0) || (index >= parameterCount)) ? null : parameterObject[index].getEnumCode(page);
+    }
+
+    /**
+     * Returns the label of an enum parameter on a page.
+     *
+     * @param index index of the parameter
+     * @param page  page of the data
+     * @return the label, or <code>null</code> if it is not an enum or has no mapped
+     *         value
+     */
+    public String getParameterEnumLabel(int index, int page) {
+        return ((index < 0) || (index >= parameterCount)) ? null : parameterObject[index].getEnumLabel(page);
+    }
+
+    /**
+     * Set enum column values by label.
+     *
+     * @param index    index of the column
+     * @param labels   labels from the dictionary
+     * @param page     page to set the values
+     * @param startRow row to start setting values
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if a label is not in the dictionary
+     */
+    public boolean setColumnLabels(int index, String[] labels, int page, int startRow) {
+        if ((index < 0) || (index >= columnCount)) {
+            setError("column index " + index + " does not exist (setColumnLabels)");
+            return false;
+        }
+        try {
+            columnObject[index].setLabels(labels, page, startRow);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumnLabels)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Set enum array values by label.
+     *
+     * @param index  index of the array
+     * @param labels labels from the dictionary
+     * @param page   page to set the values
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if a label is not in the dictionary
+     */
+    public boolean setArrayLabels(int index, String[] labels, int page) {
+        if ((index < 0) || (index >= arrayCount)) {
+            setError("array index " + index + " does not exist (setArrayLabels)");
+            return false;
+        }
+        try {
+            arrayObject[index].setLabels(labels, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArrayLabels)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Set an enum parameter value by label.
+     *
+     * @param index index of the parameter
+     * @param label label from the dictionary
+     * @param page  page to set the value
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if the label is not in the dictionary
+     */
+    public boolean setParameterLabel(int index, String label, int page) {
+        if ((index < 0) || (index >= parameterCount)) {
+            setError("parameter index " + index + " does not exist (setParameterLabel)");
+            return false;
+        }
+        try {
+            parameterObject[index].setLabel(label, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameterLabel)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Set enum column values where some may not have been chosen yet, as an interactive
+     * program needs to. A chosen code is checked. A <code>null</code> is stored as code
+     * 0, so the file cannot be written until it has a mapped code.
+     *
+     * @param index    index of the column
+     * @param codes    codes, with <code>null</code> for a value not chosen yet
+     * @param page     page to set the values
+     * @param startRow row to start setting values
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if a code is not mapped
+     */
+    public boolean setColumnEnumCells(int index, Integer[] codes, int page, int startRow) {
+        if ((index < 0) || (index >= columnCount)) {
+            setError("column index " + index + " does not exist (setColumnEnumCells)");
+            return false;
+        }
+        try {
+            columnObject[index].setEnumCells(codes, page, startRow);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumnEnumCells)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Set enum array values where some may not have been chosen yet.
+     *
+     * @param index index of the array
+     * @param codes codes, with <code>null</code> for a value not chosen yet
+     * @param page  page to set the values
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if a code is not mapped
+     * @see #setColumnEnumCells
+     */
+    public boolean setArrayEnumCells(int index, Integer[] codes, int page) {
+        if ((index < 0) || (index >= arrayCount)) {
+            setError("array index " + index + " does not exist (setArrayEnumCells)");
+            return false;
+        }
+        try {
+            arrayObject[index].setEnumCells(codes, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArrayEnumCells)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Set an enum parameter value that may not have been chosen yet.
+     *
+     * @param index index of the parameter
+     * @param code  the code, or <code>null</code> for a value not chosen yet
+     * @param page  page to set the value
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if the code is not mapped
+     * @see #setColumnEnumCells
+     */
+    public boolean setParameterEnumCell(int index, Integer code, int page) {
+        if ((index < 0) || (index >= parameterCount)) {
+            setError("parameter index " + index + " does not exist (setParameterEnumCell)");
+            return false;
+        }
+        try {
+            parameterObject[index].setEnumCell(code, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameterEnumCell)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Extend a column page to a number of rows holding zero values, with no dictionary
+     * check. This is how a program represents enum values that have not been chosen
+     * yet. The file cannot be written until they hold mapped codes.
+     *
+     * @param index index of the column
+     * @param page  page of the data
+     * @param rows  number of rows the page should have
+     */
+    public void setColumnBlankRows(int index, int page, int rows) {
+        if ((index >= 0) && (index < columnCount))
+            columnObject[index].setBlankRows(page, rows);
+    }
+
+    /**
+     * Explicitly convert a column between enum, long and string. Enum to enum remaps by
+     * exact label, enum to long gives codes, enum to string gives labels, long to enum
+     * checks codes and string to enum looks up labels. Every value is checked before
+     * any is changed. This is the way to replace a dictionary. It is not available
+     * while a layout that has been written is still open.
+     *
+     * @param index       index of the column
+     * @param targetType  <code>SDDSUtil.SDDS_ENUM</code>,
+     *                    <code>SDDSUtil.SDDS_LONG</code> or
+     *                    <code>SDDSUtil.SDDS_STRING</code>
+     * @param enum_values logical mapping for an enum target, otherwise
+     *                    <code>null</code>
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if an error occurs
+     */
+    public boolean convertColumn(int index, int targetType, String enum_values) {
+        if ((index < 0) || (index >= columnCount) || !conversionAllowed("convertColumn"))
+            return false;
+        try {
+            columnObject[index].convert(targetType,
+                    targetType == SDDS_ENUM ? new SDDSEnumDefinition(enum_values) : null);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (convertColumn)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Explicitly convert a parameter between enum, long and string.
+     *
+     * @param index       index of the parameter
+     * @param targetType  <code>SDDSUtil.SDDS_ENUM</code>,
+     *                    <code>SDDSUtil.SDDS_LONG</code> or
+     *                    <code>SDDSUtil.SDDS_STRING</code>
+     * @param enum_values logical mapping for an enum target, otherwise
+     *                    <code>null</code>
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if an error occurs
+     * @see #convertColumn
+     */
+    public boolean convertParameter(int index, int targetType, String enum_values) {
+        if ((index < 0) || (index >= parameterCount) || !conversionAllowed("convertParameter"))
+            return false;
+        try {
+            parameterObject[index].convert(targetType,
+                    targetType == SDDS_ENUM ? new SDDSEnumDefinition(enum_values) : null);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (convertParameter)");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Explicitly convert an array between enum, long and string.
+     *
+     * @param index       index of the array
+     * @param targetType  <code>SDDSUtil.SDDS_ENUM</code>,
+     *                    <code>SDDSUtil.SDDS_LONG</code> or
+     *                    <code>SDDSUtil.SDDS_STRING</code>
+     * @param enum_values logical mapping for an enum target, otherwise
+     *                    <code>null</code>
+     * @return <code>true</code> if successful<br>
+     *         <code>false</code> if an error occurs
+     * @see #convertColumn
+     */
+    public boolean convertArray(int index, int targetType, String enum_values) {
+        if ((index < 0) || (index >= arrayCount) || !conversionAllowed("convertArray"))
+            return false;
+        try {
+            arrayObject[index].convert(targetType,
+                    targetType == SDDS_ENUM ? new SDDSEnumDefinition(enum_values) : null);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (convertArray)");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean conversionAllowed(String caller) {
+        if (layoutWritten)
+            setError("Enum conversion requires a layout that has not been written (" + caller + ")");
+        return !layoutWritten;
+    }
+
+    /**
+     * Check for dictionaries that would be lost by exporting to a format with no native
+     * enum representation. An exporter should call this first and refuse to continue
+     * if it fails.
+     *
+     * @return <code>true</code> if the layout has no enums<br>
+     *         <code>false</code> if it does
+     */
+    public boolean checkEnumExport() {
+        for (int i = 0; i < columnCount; i++)
+            if (columnObject[i].getType() == SDDS_ENUM)
+                return enumExportError();
+        for (int i = 0; i < parameterCount; i++)
+            if (parameterObject[i].getType() == SDDS_ENUM)
+                return enumExportError();
+        for (int i = 0; i < arrayCount; i++)
+            if (arrayObject[i].getType() == SDDS_ENUM)
+                return enumExportError();
+        return true;
+    }
+
+    private boolean enumExportError() {
+        setError("This export format cannot preserve enums; convert explicitly to long codes or string labels first (checkEnumExport)");
+        return false;
+    }
+
+    /** Check that every enum in the layout has a valid, unchanged definition. */
+    private boolean validateEnumLayout() {
+        for (int i = 0; i < columnCount; i++) {
+            if ((columnObject[i].getType() == SDDS_ENUM) && (columnObject[i].getEnumDefinition() == null)) {
+                setError("Incomplete or invalid enum definition for column " + columnObject[i].getName());
+                return false;
+            }
+        }
+        for (int i = 0; i < parameterCount; i++) {
+            if ((parameterObject[i].getType() == SDDS_ENUM) && (parameterObject[i].getEnumDefinition() == null)) {
+                setError("Incomplete or invalid enum definition for parameter " + parameterObject[i].getName());
+                return false;
+            }
+        }
+        for (int i = 0; i < arrayCount; i++) {
+            if ((arrayObject[i].getType() == SDDS_ENUM) && (arrayObject[i].getEnumDefinition() == null)) {
+                setError("Incomplete or invalid enum definition for array " + arrayObject[i].getName());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Check that a whole page can be written before any of it is. An enum value that was
+     * never set holds code 0, which is written if the dictionary maps it and otherwise
+     * stops the write, since nothing else may be substituted.
+     */
+    private boolean preparePage(int page) {
+        int endRow = 0;
+        for (int i = 0; i < columnCount; i++)
+            endRow = Math.max(endRow, columnObject[i].getRowCount(page));
+        for (int i = 0; i < parameterCount; i++) {
+            SDDSParameter parameter = parameterObject[i];
+            String name = parameter.getName();
+            if (!parameter.isValidFixedValue()) {
+                setError("Invalid fixed value for parameter " + name + " (writePage)");
+                return false;
+            }
+            if (!parameter.fixed && (page > parameter.getPageCount())) {
+                if (parameter.getType() != SDDS_ENUM) {
+                    setError("invalid page number (" + page + ") for parameter " + name + " (writePage)");
+                    return false;
+                }
+                SDDSEnumDefinition definition = parameter.getEnumDefinition();
+                if ((definition != null) && definition.hasCode(0))
+                    parameter.makeBlankPages(page);
+            }
+            if (!parameter.isValidEnumPage(page) || ((parameter.getType() == SDDS_ENUM) && !parameter.fixed
+                    && (page > parameter.getPageCount()))) {
+                setError("Invalid enum parameter " + name + ": page " + page + " needs a state");
+                return false;
+            }
+        }
+        for (int i = 0; i < arrayCount; i++) {
+            SDDSArray array = arrayObject[i];
+            if ((page > array.getPageCount()) && (array.getType() == SDDS_ENUM))
+                array.makeBlankPages(page);
+            if (!array.dimensionsMatch(page)) {
+                setError("unable to write array data on page " + page + " for array " + array.getName()
+                        + ": its dimensions do not match its values (writePage)");
+                return false;
+            }
+            int element = array.firstInvalidElement(page);
+            if (element > 0) {
+                setError("Invalid enum array " + array.getName() + ": page " + page + " element " + element
+                        + " needs a state");
+                return false;
+            }
+        }
+        for (int i = 0; i < columnCount; i++) {
+            SDDSColumn column = columnObject[i];
+            int rows = Math.max(column.getRowCount(page), 0);
+            if (rows < endRow) {
+                if (column.getType() != SDDS_ENUM) {
+                    setError("invalid column elemant at page (" + page + ") row (" + (rows + 1) + ") for column "
+                            + column.getName() + " (writePage)");
+                    return false;
+                }
+                column.setBlankRows(page, endRow);
+            }
+            int row = column.firstInvalidRow(page);
+            if (row > 0) {
+                setError("Invalid enum column " + column.getName() + ": page " + page + " row " + row
+                        + " needs a state");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Ask for at least this protocol version when writing. Without this the writer uses
+     * the lowest version that can hold the layout, so that the file stays readable by
+     * older programs, and SDDS6 whenever the layout has an enum.
+     *
+     * @param version protocol version from <code>1</code> to
+     *                <code>SDDSUtil.SDDS_VERSION</code>
+     * @return <code>true</code> if the version is valid
+     */
+    public boolean setMinimumVersion(int version) {
+        if ((version < 1) || (version > SDDSUtil.SDDS_VERSION)) {
+            setError("Invalid SDDS protocol version (setMinimumVersion)");
+            return false;
+        }
+        minimumVersion = version;
+        return true;
+    }
+
+    /** Returns the protocol version the current layout would be written with. */
+    public int selectVersion() {
+        boolean unsigned = false, longDouble = false, wide = false, categorical = false;
+        for (int pass = 0; pass < 3; pass++) {
+            int count = pass == 0 ? parameterCount : pass == 1 ? arrayCount : columnCount;
+            for (int i = 0; i < count; i++) {
+                int type = pass == 0 ? parameterObject[i].getType()
+                        : pass == 1 ? arrayObject[i].getType() : columnObject[i].getType();
+                unsigned |= (type == SDDS_ULONG) || (type == SDDS_USHORT);
+                longDouble |= type == SDDS_LONGDOUBLE;
+                wide |= (type == SDDS_ULONG64) || (type == SDDS_LONG64);
+                categorical |= type == SDDS_ENUM;
+            }
+        }
+        int version = 1;
+        if (unsigned)
+            version = 2;
+        if (columnMajorOrder && !asciiFile)
+            version = 3;
+        if (longDouble)
+            version = 4;
+        if (wide)
+            version = 5;
+        if (categorical)
+            version = 6;
+        return Math.max(version, minimumVersion);
+    }
+
+    /**
      * Return the index of the specified parameter.
      * 
      * @param name name of an existing parameter
@@ -4505,8 +4309,13 @@ public class SDDSFile {
             setError("parameter index " + parameterIndex + " does not exist (setParameter)");
             return false;
         }
-        for (i = 0; i < Array.getLength(values); i++)
-            parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        try {
+            for (i = 0; i < Array.getLength(values); i++)
+                parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameter)");
+            return false;
+        }
         return true;
     }
 
@@ -4564,8 +4373,13 @@ public class SDDSFile {
             setError("parameter index " + parameterIndex + " does not exist (setParameter)");
             return false;
         }
-        for (i = 0; i < Array.getLength(values); i++)
-            parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        try {
+            for (i = 0; i < Array.getLength(values); i++)
+                parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameter)");
+            return false;
+        }
         return true;
     }
 
@@ -4597,8 +4411,13 @@ public class SDDSFile {
             setError("parameter index " + parameterIndex + " does not exist (setParameter)");
             return false;
         }
-        for (i = 0; i < Array.getLength(values); i++)
-            parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        try {
+            for (i = 0; i < Array.getLength(values); i++)
+                parameterObject[parameterIndex].setValue(values[i], i + startPage);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setParameter)");
+            return false;
+        }
         return true;
     }
 
@@ -5299,7 +5118,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsLong(values), page);
+        try {
+            arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsLong(values), page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5330,7 +5154,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsLong(values), page);
+        try {
+            arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsLong(values), page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5361,7 +5190,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(values, page);
+        try {
+            arrayObject[arrayIndex].setValues(values, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5392,7 +5226,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsDouble(values), page);
+        try {
+            arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsDouble(values), page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5423,7 +5262,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(values, page);
+        try {
+            arrayObject[arrayIndex].setValues(values, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5454,7 +5298,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(values, page);
+        try {
+            arrayObject[arrayIndex].setValues(values, page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5485,7 +5334,12 @@ public class SDDSFile {
             setError("array index " + arrayIndex + " does not exist (setArray)");
             return false;
         }
-        arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsString(values), page);
+        try {
+            arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsString(values), page);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setArray)");
+            return false;
+        }
         return true;
     }
 
@@ -5532,8 +5386,16 @@ public class SDDSFile {
                 arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsDouble(values, type), page);
                 return true;
             case SDDS_LONGDOUBLE:
-                setError("error: longdouble not supported in SDDSJava");
-                return false;
+                arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsLongDouble(values), page);
+                return true;
+            case SDDS_ENUM:
+                try {
+                    arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsEnumCodes(values), page);
+                } catch (IllegalArgumentException e) {
+                    setError(e.getMessage() + " (setArray)");
+                    return false;
+                }
+                return true;
             case SDDS_STRING:
             case SDDS_CHARACTER:
                 arrayObject[arrayIndex].setValues(SDDSUtil.castArrayAsString(values, type), page);
@@ -5711,7 +5573,12 @@ public class SDDSFile {
             setError("column index " + columnIndex + " does not exist (setColumn)");
             return false;
         }
-        columnObject[columnIndex].setValues(values, page, startRow);
+        try {
+            columnObject[columnIndex].setValues(values, page, startRow);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumn)");
+            return false;
+        }
         return true;
     }
 
@@ -5828,7 +5695,12 @@ public class SDDSFile {
             setError("column index " + columnIndex + " does not exist (setColumn)");
             return false;
         }
-        columnObject[columnIndex].setValues(values, page, startRow);
+        try {
+            columnObject[columnIndex].setValues(values, page, startRow);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumn)");
+            return false;
+        }
         return true;
     }
 
@@ -5889,7 +5761,12 @@ public class SDDSFile {
             setError("column index " + columnIndex + " does not exist (setColumn)");
             return false;
         }
-        columnObject[columnIndex].setValues(values, page, startRow);
+        try {
+            columnObject[columnIndex].setValues(values, page, startRow);
+        } catch (IllegalArgumentException e) {
+            setError(e.getMessage() + " (setColumn)");
+            return false;
+        }
         return true;
     }
 
@@ -6016,8 +5893,15 @@ public class SDDSFile {
             case SDDS_DOUBLE:
                 return setColumn(columnIndex, SDDSUtil.castArrayAsDouble(values, type), page, startRow);
             case SDDS_LONGDOUBLE:
-                setError("error: longdouble not supported in SDDSJava");
-                return false;
+                columnObject[columnIndex].setValues(SDDSUtil.castArrayAsLongDouble(values), page, startRow);
+                return true;
+            case SDDS_ENUM:
+                try {
+                    return setColumn(columnIndex, SDDSUtil.castArrayAsEnumCodes(values), page, startRow);
+                } catch (IllegalArgumentException e) {
+                    setError(e.getMessage() + " (setColumn)");
+                    return false;
+                }
             case SDDS_STRING:
             case SDDS_CHARACTER:
                 return setColumn(columnIndex, SDDSUtil.castArrayAsString(values, type), page, startRow);
@@ -6250,14 +6134,28 @@ public class SDDSFile {
     }
 
     /**
-     * Write the layout to a file.
+     * Write the layout to a file. The protocol version is the lowest that can hold the
+     * layout (see {@link #selectVersion}), which is SDDS6 whenever there is an enum.
      *
      * @return <code>true</code> if the layout was successfully written<br>
      *         <code>false</code> if an error occured
      */
     public boolean writeLayout() {
+        if (!validateEnumLayout())
+            return false;
+        layoutVersion = selectVersion();
+        /* The setting the C writers honor, unless this program chose a byte order itself. */
+        String outputEndian = System.getenv("SDDS_OUTPUT_ENDIANESS");
+        if ((outputEndian != null) && !endianSet) {
+            if (outputEndian.startsWith("big"))
+                bigEndian = true;
+            else if (outputEndian.startsWith("little"))
+                bigEndian = false;
+        }
         try {
-            dos.writeBytes("SDDS5\n");
+            dos.writeBytes("SDDS" + layoutVersion + "\n");
+            if ((layoutVersion < 3) && !asciiFile)
+                dos.writeBytes(bigEndian ? "!# big-endian\n" : "!# little-endian\n");
             if (!writeDescription())
                 return false;
             if (!writeParameterHeaders())
@@ -6266,23 +6164,31 @@ public class SDDSFile {
                 return false;
             if (!writeColumnHeaders())
                 return false;
-            if (asciiFile) {
-                if (noRowCount)
-                    dos.writeBytes("&data mode=ascii, no_row_counts=1, &end\n");
-                else
-                    dos.writeBytes("&data mode=ascii, &end\n");
+            String mode = asciiFile ? "ascii" : "binary";
+            String endian = bigEndian ? "big" : "little";
+            boolean columnMajor = columnMajorOrder && !asciiFile;
+            boolean rowCounts = noRowCount && asciiFile;
+            if (layoutVersion == 6) {
+                dos.writeBytes("&data mode=" + mode + ", lines_per_row=1, no_row_counts=" + (rowCounts ? 1 : 0)
+                        + ", fixed_row_count=0, additional_header_lines=0, column_major_order="
+                        + (columnMajor ? 1 : 0) + ", endian=" + endian + ",  &end\n");
             } else {
-                if (bigEndian) {
-                    dos.writeBytes("&data mode=binary, endian=big, &end\n");
-                } else {
-                    dos.writeBytes("&data mode=binary, endian=little, &end\n");
+                String line = "&data mode=" + mode + ", ";
+                if (rowCounts)
+                    line = line + "no_row_counts=1, ";
+                if ((layoutVersion >= 3) && !asciiFile) {
+                    line = line + "endian=" + endian + ", ";
+                    if (columnMajor)
+                        line = line + "column_major_order=1, ";
                 }
+                dos.writeBytes(line + "&end\n");
             }
             dos.flush();
         } catch (Exception e) {
             setError("unable to write layout (writeLayout)");
             return false;
         }
+        layoutWritten = true;
         return true;
     }
 
@@ -6293,19 +6199,16 @@ public class SDDSFile {
      *         <code>false</code> if an error occured
      */
     public boolean writeDescription() {
-        String line;
         if ((descriptionText == null) && (descriptionContents == null))
             return true;
-        line = "&description ";
-        if (descriptionText != null) {
-            line = line.concat("text=" + SDDSUtil.prepareString(descriptionText) + ", ");
-        }
-        if (descriptionContents != null) {
-            line = line.concat("contents=" + SDDSUtil.prepareString(descriptionContents) + ", ");
-        }
-        line = line.concat("&end\n");
         try {
-            dos.writeBytes(line);
+            if (selectVersion() == 6) {
+                dos.write(SDDSNamelist.finish6("&description " + SDDSNamelist.field6("text", descriptionText)
+                        + SDDSNamelist.field6("contents", descriptionContents) + " &end\n"));
+            } else {
+                dos.writeBytes("&description " + SDDSNamelist.legacyField("text", descriptionText)
+                        + SDDSNamelist.legacyField("contents", descriptionContents) + "&end\n");
+            }
         } catch (Exception e) {
             setError("unable to write description (writeDescription)");
             return false;
@@ -6340,7 +6243,7 @@ public class SDDSFile {
             setError("invalid parameter index (writeParameterHeader)");
             return false;
         }
-        if (parameterObject[index].writeHeader(dos))
+        if (parameterObject[index].writeHeader(dos, selectVersion()))
             return true;
         setError("unable to write parameter header (writeParameterHeader)");
         return false;
@@ -6373,7 +6276,7 @@ public class SDDSFile {
             setError("invalid array index (writeArrayHeader)");
             return false;
         }
-        if (arrayObject[index].writeHeader(dos))
+        if (arrayObject[index].writeHeader(dos, selectVersion()))
             return true;
         setError("unable to write array header (writeColumnHeader)");
         return false;
@@ -6406,7 +6309,7 @@ public class SDDSFile {
             setError("invalid column index (writeColumnHeader)");
             return false;
         }
-        if (columnObject[index].writeHeader(dos))
+        if (columnObject[index].writeHeader(dos, selectVersion()))
             return true;
         setError("unable to write column header (writeColumnHeader)");
         return false;
@@ -6498,219 +6401,146 @@ public class SDDSFile {
     }
 
     /**
-     * Write specified the page to a file.
-     * 
+     * Write specified the page to a file. The page is checked before any of it is
+     * written.
+     *
      * @param page page to write
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if an error occurs
      */
     public boolean writePage(int page) {
-        int i, j, endRow, rows;
-        endRow = 0;
-        for (i = 0; i < columnCount; i++) {
-            rows = columnObject[i].getRowCount(page);
-            if (rows > endRow)
-                endRow = rows;
+        if (!preparePage(page))
+            return false;
+        int endRow = 0;
+        for (int i = 0; i < columnCount; i++)
+            endRow = Math.max(endRow, columnObject[i].getRowCount(page));
+        boolean written = asciiFile ? writeAsciiPage(page, endRow) : writeBinaryPage(page, endRow);
+        try {
+            dos.flush();
+            ledos.flush();
+        } catch (IOException e) {
+            setError("unable to flush data for page " + page + " (writePage)");
+            return false;
         }
-        if (asciiFile) {
-            try {
-                dos.writeBytes("!page number " + page + "\n");
-            } catch (IOException e) {
-                setError("unable to write comment line to ascii page " + page + " (writePage)");
-                return false;
-            }
-            for (i = 0; i < parameterCount; i++) {
-                if (!parameterObject[i].writeValue(dos, page, true)) {
-                    setError("invalid page number (" + page + ") for parameter " + parameterObject[i].getName()
-                            + " (writePage)");
-                    try {
-                        dos.flush();
-                    } catch (IOException e) {
-                    }
+        return written;
+    }
+
+    private boolean writeAsciiRows(int page, int endRow) {
+        for (int row = 1; row <= endRow; row++) {
+            for (int i = 0; i < columnCount; i++) {
+                if (!columnObject[i].writeElement(dos, page, row, true)) {
+                    setError("invalid column elemant at page (" + page + ") row (" + row + ") for column "
+                            + columnObject[i].getName() + " (writePage)");
                     return false;
                 }
             }
-            if (arrayCount > 0) {
-                for (i = 0; i < arrayCount; i++) {
-                    if (!arrayObject[i].writeValues(dos, page, true)) {
-                        setError("unable to write array data on page " + page + " (writePage)");
-                        return false;
-                    }
-                }
-            }
-            if (!noRowCount) {
-                /*
-                 * We are using 32bit integer row count instead of 64bit because Java arrays are
-                 * limited in size
-                 */
-                if (columnCount > 0) {
-                    try {
-                        dos.writeBytes("\t" + endRow + "\n");
-                    } catch (IOException e) {
-                        setError("unable to write number of rows to ascii page " + page + " (writePage)");
-                        return false;
-                    }
-                    if (endRow > 0) {
-                        for (j = 1; j <= endRow; j++) {
-                            for (i = 0; i < columnCount; i++) {
-                                if (!columnObject[i].writeElement(dos, page, j, true)) {
-                                    setError("invalid column elemant at page (" + page + ") row (" + j + ") for column "
-                                            + columnObject[i].getName() + " (writePage)");
-                                    try {
-                                        dos.flush();
-                                    } catch (IOException e) {
-                                    }
-                                    return false;
-                                }
-                            }
-                            try {
-                                dos.writeBytes("\n");
-                            } catch (IOException e) {
-                                setError("unable to write newline character to ascii page " + page + " (writePage)");
-                                return false;
-                            }
-                        }
-                    }
-                }
-            } else {
-                if (endRow > 0) {
-                    for (j = 1; j <= endRow; j++) {
-                        for (i = 0; i < columnCount; i++) {
-                            if (!columnObject[i].writeElement(dos, page, j, true)) {
-                                setError("invalid column elemant at page (" + page + ") row (" + j + ") for column "
-                                        + columnObject[i].getName() + " (writePage)");
-                                try {
-                                    dos.flush();
-                                } catch (IOException e) {
-                                }
-                                return false;
-                            }
-                        }
-                        try {
-                            dos.writeBytes("\n");
-                        } catch (IOException e) {
-                            setError("unable to write newline character to ascii page " + page + " (writePage)");
-                            return false;
-                        }
-                    }
-                }
-                if (columnCount > 0) {
-                    try {
-                        dos.writeBytes("\n");
-                    } catch (IOException e) {
-                        setError("unable to write newline character to ascii page " + page + " (writePage)");
-                        return false;
-                    }
-                }
-            }
             try {
-                dos.flush();
+                dos.writeBytes("\n");
             } catch (IOException e) {
-                setError("unable to flush data for ascii page " + page + " (writePage)");
+                setError("unable to write newline character to ascii page " + page + " (writePage)");
                 return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean writeAsciiPage(int page, int endRow) {
+        try {
+            dos.writeBytes("!page number " + page + "\n");
+        } catch (IOException e) {
+            setError("unable to write comment line to ascii page " + page + " (writePage)");
+            return false;
+        }
+        for (int i = 0; i < parameterCount; i++) {
+            if (!parameterObject[i].writeValue(dos, page, true)) {
+                setError("invalid page number (" + page + ") for parameter " + parameterObject[i].getName()
+                        + " (writePage)");
+                return false;
+            }
+        }
+        for (int i = 0; i < arrayCount; i++) {
+            if (!arrayObject[i].writeValues(dos, page, true)) {
+                setError("unable to write array data on page " + page + " for array " + arrayObject[i].getName()
+                        + " (writePage)");
+                return false;
+            }
+        }
+        if (columnCount == 0)
+            return true;
+        try {
+            /*
+             * We are using 32bit integer row count instead of 64bit because Java arrays are
+             * limited in size
+             */
+            if (!noRowCount)
+                dos.writeBytes("\t" + endRow + "\n");
+        } catch (IOException e) {
+            setError("unable to write number of rows to ascii page " + page + " (writePage)");
+            return false;
+        }
+        if (!writeAsciiRows(page, endRow))
+            return false;
+        if (noRowCount) {
+            try {
+                dos.writeBytes("\n");
+            } catch (IOException e) {
+                setError("unable to write newline character to ascii page " + page + " (writePage)");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean writeBinaryElement(int column, int page, int row) {
+        boolean written = bigEndian ? columnObject[column].writeElement(dos, page, row, false)
+                : columnObject[column].writeElement(ledos, page, row);
+        if (!written)
+            setError("invalid column elemant at page (" + page + ") row (" + row + ") for column "
+                    + columnObject[column].getName() + " (writePage)");
+        return written;
+    }
+
+    private boolean writeBinaryPage(int page, int endRow) {
+        try {
+            /*
+             * We are using 32bit integer row count instead of 64bit because Java arrays are
+             * limited in size
+             */
+            if (bigEndian)
+                dos.writeInt(endRow);
+            else
+                ledos.writeInt(endRow);
+        } catch (IOException e) {
+            setError("unable to write row count to binary page " + page + " (writePage)");
+            return false;
+        }
+        for (int i = 0; i < parameterCount; i++) {
+            if (!(bigEndian ? parameterObject[i].writeValue(dos, page, false)
+                    : parameterObject[i].writeValue(ledos, page))) {
+                setError("invalid page number (" + page + ") for parameter " + parameterObject[i].getName()
+                        + " (writePage)");
+                return false;
+            }
+        }
+        for (int i = 0; i < arrayCount; i++) {
+            if (!(bigEndian ? arrayObject[i].writeValues(dos, page, false) : arrayObject[i].writeValues(ledos, page))) {
+                setError("unable to write binary array data on page " + page + " for array "
+                        + arrayObject[i].getName() + " (writePage)");
+                return false;
+            }
+        }
+        if (columnMajorOrder) {
+            for (int i = 0; i < columnCount; i++) {
+                for (int row = 1; row <= endRow; row++) {
+                    if (!writeBinaryElement(i, page, row))
+                        return false;
+                }
             }
         } else {
-            if (bigEndian) {
-                try {
-                    /*
-                     * We are using 32bit integer row count instead of 64bit because Java arrays are
-                     * limited in size
-                     */
-                    dos.writeInt(endRow);
-                } catch (IOException e) {
-                    setError("unable to write row count to binary page " + page + " (writePage)");
-                    return false;
-                }
-                for (i = 0; i < parameterCount; i++) {
-                    if (!parameterObject[i].writeValue(dos, page, false)) {
-                        setError("invalid page number (" + page + ") for parameter " + parameterObject[i].getName()
-                                + " (writePage)");
-                        try {
-                            dos.flush();
-                        } catch (IOException e) {
-                        }
+            for (int row = 1; row <= endRow; row++) {
+                for (int i = 0; i < columnCount; i++) {
+                    if (!writeBinaryElement(i, page, row))
                         return false;
-                    }
-                }
-                if (arrayCount > 0) {
-                    for (i = 0; i < arrayCount; i++) {
-                        if (!arrayObject[i].writeValues(dos, page, false)) {
-                            setError("unable to write binary array data on page " + page + " (writePage)");
-                            try {
-                                dos.flush();
-                            } catch (IOException e) {
-                            }
-                            return false;
-                        }
-                    }
-                }
-                for (j = 1; j <= endRow; j++) {
-                    for (i = 0; i < columnCount; i++) {
-                        if (!columnObject[i].writeElement(dos, page, j, false)) {
-                            setError("invalid column elemant at page (" + page + ") row (" + j + ") for column "
-                                    + columnObject[i].getName() + " (writePage)");
-                            try {
-                                dos.flush();
-                            } catch (IOException e) {
-                            }
-                            return false;
-                        }
-                    }
-                }
-                try {
-                    dos.flush();
-                } catch (IOException e) {
-                    setError("unable to flush data for page " + page + " (writePage)");
-                    return false;
-                }
-            } else {
-                try {
-                    ledos.writeInt(endRow);
-                } catch (IOException e) {
-                    setError("unable to write row count to binary page " + page + " (writePage)");
-                    return false;
-                }
-                for (i = 0; i < parameterCount; i++) {
-                    if (!parameterObject[i].writeValue(ledos, page)) {
-                        setError("invalid page number (" + page + ") for parameter " + parameterObject[i].getName()
-                                + " (writePage)");
-                        try {
-                            ledos.flush();
-                        } catch (IOException e) {
-                        }
-                        return false;
-                    }
-                }
-                if (arrayCount > 0) {
-                    for (i = 0; i < arrayCount; i++) {
-                        if (!arrayObject[i].writeValues(ledos, page)) {
-                            setError("unable to write array data on page " + page + " (writePage)");
-                            try {
-                                ledos.flush();
-                            } catch (IOException e) {
-                            }
-                            return false;
-                        }
-                    }
-                }
-                for (j = 1; j <= endRow; j++) {
-                    for (i = 0; i < columnCount; i++) {
-                        if (!columnObject[i].writeElement(ledos, page, j)) {
-                            setError("invalid column elemant at page (" + page + ") row (" + j + ") for column "
-                                    + columnObject[i].getName() + " (writePage)");
-                            try {
-                                ledos.flush();
-                            } catch (IOException e) {
-                            }
-                            return false;
-                        }
-                    }
-                }
-                try {
-                    ledos.flush();
-                } catch (IOException e) {
-                    setError("unable to flush data for page " + page + " (writePage)");
-                    return false;
                 }
             }
         }
@@ -6732,6 +6562,8 @@ public class SDDSFile {
             return false;
         }
         column--;
+        if (columnObject[column].getType() == SDDS_ENUM)
+            return addEnumElement(column, SDDSEnumDefinition.parseCode(v));
         String values[];
         int pcount = pageCount();
         int size = columnObject[column].getRowCount(pcount);
@@ -6806,6 +6638,10 @@ public class SDDSFile {
             return false;
         }
         column--;
+        if (columnObject[column].getType() == SDDS_ENUM) {
+            setError("Enum values are categorical; a numeric value requires an explicit integer code (addColumnElement)");
+            return false;
+        }
         double values[];
         int pcount = pageCount();
         int size = columnObject[column].getRowCount(pcount);
@@ -6860,6 +6696,10 @@ public class SDDSFile {
             return false;
         }
         column--;
+        if (columnObject[column].getType() == SDDS_ENUM) {
+            setError("Enum values are categorical; a numeric value requires an explicit integer code (addColumnElement)");
+            return false;
+        }
         double values[];
         int pcount = pageCount();
         int size = columnObject[column].getRowCount(pcount);
@@ -6914,6 +6754,9 @@ public class SDDSFile {
             return false;
         }
         column--;
+        if (columnObject[column].getType() == SDDS_ENUM)
+            return addEnumElement(column, (v < Integer.MIN_VALUE) || (v > Integer.MAX_VALUE) ? null
+                    : Integer.valueOf((int) v));
         long values[];
         int pcount = pageCount();
         int size = columnObject[column].getRowCount(pcount);
@@ -6926,7 +6769,7 @@ public class SDDSFile {
             values = new long[size];
             for (int i = 0; i < size - 1; i++) {
                 try {
-                    values[i] = ((Long) o[i]).longValue();
+                    values[i] = ((Number) o[i]).longValue();
                 } catch (Exception e) {
                     setError("Attempt to set long value (" + v + ") for column " + column
                             + " failed. (addColumnElement)");
@@ -6968,6 +6811,8 @@ public class SDDSFile {
             return false;
         }
         column--;
+        if (columnObject[column].getType() == SDDS_ENUM)
+            return addEnumElement(column, Integer.valueOf(v));
         long values[];
         int pcount = pageCount();
         int size = columnObject[column].getRowCount(pcount);
@@ -7005,6 +6850,19 @@ public class SDDSFile {
      */
     public boolean addColumnElement(String name, short v) {
         return addColumnElement(getColumnIndex(name) + 1, v);
+    }
+
+    /** Add one checked code to the last page of an enum column. */
+    private boolean addEnumElement(int column, Integer code) {
+        SDDSEnumDefinition definition = columnObject[column].getEnumDefinition();
+        if ((code == null) || (definition == null) || !definition.hasCode(code.intValue())) {
+            setError("Invalid enum code for column " + columnObject[column].getName() + " (addColumnElement)");
+            return false;
+        }
+        int page = pageCount();
+        int rows = Math.max(columnObject[column].getRowCount(page), 0);
+        columnObject[column].setValues(new long[] { code.intValue() }, page, rows + 1);
+        return true;
     }
 
     /**
