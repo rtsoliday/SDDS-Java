@@ -12,9 +12,7 @@ A pure‑Java implementation of the **Self‑Describing Data Sets (SDDS)** file 
 * Both binary byte orders and both binary major orders, plus ASCII.
 * Plain, gzip (`.gz`) and XZ/LZMA (`.xz`, `.lzma`) files, chosen by file name as in the C library.
 * Handles unlimited numbers of pages (tables) per file.
-* Command‑line & GUI utilities:
-  * `SDDS.SDDSUtil` – quick conversions and file inspection.
-  * `SDDSedit.jar` – Swing editor for visualising and editing SDDS files.
+* `SDDSedit.jar` – Swing editor for visualising and editing SDDS files.
 
 ---
 
@@ -22,7 +20,7 @@ A pure‑Java implementation of the **Self‑Describing Data Sets (SDDS)** file 
 
 ### Prerequisites
 
-* **JDK 11** or newer (tested up to OpenJDK 21).
+* **JDK 11** or newer (tested with OpenJDK 11 and 17). The jars target Java 11 whichever JDK builds them.
 * GNU `make` (or run the `javac`/`jar` commands manually).
 
 ### Building everything
@@ -41,7 +39,7 @@ Artifacts are written to the **`javalib/`** directory:
 | Jar | Description |
 | --- | --- |
 | `SDDS.jar` | Core SDDS library – add to your project’s class‑path. |
-| `SDDSedit.jar` | Stand‑alone GUI editor (depends on `SDDS.jar`). |
+| `SDDSedit.jar` | Stand‑alone GUI editor, which includes the library. |
 
 To rebuild from scratch run `make clean && make`.
 
@@ -133,13 +131,13 @@ $ java -jar javalib/SDDSedit.jar data.sdds
 `SDDSedit` is modeled on the Qt `sddseditor` in the SDDS toolkit: the same layout, menus, shortcuts and behavior, in pure Java. **Info → Help** (F1) has the full guide, and it is searchable.
 
 * **Panels.** Parameters, columns and arrays each have a panel that can be collapsed and resized. Parameters wrap into side-by-side groups, and column headers show each type and its units. The outline on the left summarizes the file and jumps to any definition.
-* **Editing.** A click edits a cell, and typing replaces its text. Ctrl-click, Shift-click and dragging select cells, disconnected ones too, and Esc clears the selection. Copy and paste use tab-separated text. Undo and redo cover cell edits and structural changes, but history does not cross a page change. Values are checked against their type.
+* **Editing.** A click edits a cell, and typing replaces its text. Ctrl-click, Shift-click and dragging select cells, disconnected ones too, and Esc clears the selection. Copy and paste use tab-separated text. Undo and redo cover cell edits and structural changes, but history does not cross a page change, and it keeps only what fits in about a quarter of Java's memory. Values are checked against their type.
 * **Rows.** Sort, insert and delete rows, or use **Filter rows** to view only rows that pass an expression such as `x>0 && Status=="OK"`. This never changes the file. A numeric column with Time in its name can display as a local or UTC date.
 * **Formulas.** Fill Series, Apply Numerical Expression and Apply Text Formula work on the selected cells. Integers of up to 64 bits are computed exactly, and long double cells keep their digits through `+ - * /`.
 * **Arrays.** **Array viewer** opens a window with any two dimensions as the grid, sliders for the others, and an optional heatmap. Its edits share the main window's undo history.
 * **Definitions.** The insert and attributes dialogs change definitions, and dragging a column or array header reorders it. **File → New** builds a file from nothing.
-* **Saving.** A save is written beside the destination, checked, and only then replaces it, so a failed save leaves the old file as it was. Saving through a symbolic link to a versioned file such as `data.009` writes `data.010` and moves the link. The save format switch in the toolbar chooses ASCII or binary.
-* **Other programs.** **Plot** runs `sddsplot` on a snapshot. **Export CSV** is built in. **Export HDF** runs `sdds2hdf`, because writing HDF natively needs a library that pure Java does not have. Both programs must be on the PATH.
+* **Saving.** A save is written beside the destination, checked, and only then replaces it, so a failed save leaves the old file as it was. A read-only file, or one locked by an SDDS program, is refused. Saving through a symbolic link to a versioned file such as `data.009` writes `data.010` and moves the link. The save format switch in the toolbar chooses ASCII or binary.
+* **Other programs.** **Plot** runs `sddsplot` on a snapshot. **Export CSV** is built in. **Export HDF** runs `sdds2hdf`, because writing HDF natively needs a library that pure Java does not have, and replaces the destination only if the program succeeds. Both programs must be on the PATH.
 
 Enum values appear as `label (code)` and are edited by choosing from the states in the dictionary. New rows, pages and array elements start at the state of code 0 if the dictionary maps it. Otherwise they stay blank, and saving names the cell that needs a state. To replace a dictionary, edit **enum values** in an element's attributes: values are converted by label, and the change is refused if a label in use would be lost.
 

@@ -157,7 +157,7 @@ public final class SDDSLongDouble extends Number implements Comparable<SDDSLongD
             return round(negative, new BigDecimal(body));
         } catch (NumberFormatException e) {
             /* An exponent too large even for BigDecimal is an overflow or an underflow. */
-            String lower = body.toLowerCase();
+            String lower = body.toLowerCase(java.util.Locale.ROOT);
             int e10 = lower.indexOf('e');
             boolean zero = lower.substring(0, e10 < 0 ? lower.length() : e10).replace(".", "").replace("0", "").isEmpty();
             if (zero || (e10 >= 0 && lower.startsWith("-", e10 + 1)))

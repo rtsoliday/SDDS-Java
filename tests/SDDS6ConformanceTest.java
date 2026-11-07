@@ -94,6 +94,8 @@ public class SDDS6ConformanceTest {
         namelist();
         setters();
         nonFiniteText();
+        turkishLocale();
+        readErrors();
         conversions();
         versions();
         longDouble();
@@ -294,6 +296,46 @@ public class SDDS6ConformanceTest {
     }
 
     /** Assignments validate membership and numbers are not codes. */
+    /* Type names and special values are ASCII, so a locale's own case rules must not change them. */
+    static void turkishLocale() {
+        java.util.Locale saved = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(new java.util.Locale("tr"));
+        try {
+            nonFiniteText();
+            equal("a type name in capitals", SDDSUtil.SDDS_STRING, SDDSUtil.identifyType("STRING"));
+        } finally {
+            java.util.Locale.setDefault(saved);
+        }
+    }
+
+    /* A file that cannot be read says why. */
+    static void readErrors() {
+        SDDSFile missing = new SDDSFile(work.resolve("no-such-file.sdds").toString());
+        check("a missing file fails", !missing.readFile());
+        String text = missing.getErrors();
+        check("and says so: " + text, text.contains("does not exist"));
+        SDDSFile folder = new SDDSFile(work.toString());
+        check("a folder fails", !folder.readFile());
+        text = folder.getErrors();
+        check("and says so: " + text, text.contains("is a directory"));
+        try {
+            String name = work.resolve("truncated.sdds").toString();
+            SDDSFile f = new SDDSFile(name);
+            f.setMode(true);
+            f.defineColumn("x", SDDSUtil.SDDS_DOUBLE);
+            f.setColumn(0, new double[] { 1, 2, 3 }, 1, 1);
+            check("write a file to truncate", f.writeFile());
+            byte[] all = Files.readAllBytes(Paths.get(name));
+            Files.write(Paths.get(name), Arrays.copyOf(all, all.length - 5));
+            SDDSFile cut = new SDDSFile(name);
+            check("a truncated file fails", !cut.readFile());
+            text = cut.getErrors();
+            check("and says so: " + text, text.contains("ends too soon"));
+        } catch (java.io.IOException e) {
+            check("truncated file test: " + e, false);
+        }
+    }
+
     /* Text reaches doubles and floats as C reads it, and never silently becomes 0. */
     static void nonFiniteText() {
         SDDSFile f = new SDDSFile();

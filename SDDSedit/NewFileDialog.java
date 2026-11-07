@@ -123,7 +123,8 @@ final class NewFileDialog extends JDialog {
     private boolean accepted;
 
     private NewFileDialog(Frame owner) {
-        super(owner, "New SDDS File", Dialog.ModalityType.DOCUMENT_MODAL);
+        /* Application modal: an array viewer must not change the document under this dialog. */
+        super(owner, "New SDDS File", Dialog.ModalityType.APPLICATION_MODAL);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 
         JPanel content = new JPanel(new BorderLayout(0, 10));
@@ -538,7 +539,7 @@ final class NewFileDialog extends JDialog {
                     String shapeProblem = null;
                     if (dims == null)
                         shapeProblem = "Enter the shape of \u201c" + name + "\u201d as sizes such as 5 or 3x4";
-                    else if (Document.product(dims) < 0 || Document.product(dims) > MAX_ELEMENTS)
+                    else if (Document.product(dims) < 0 || Document.product(dims) > MAX_ELEMENTS || Document.shapeTooLarge(dims))
                         shapeProblem = "\u201c" + name + "\u201d can have at most " + MAX_ELEMENTS + " elements";
                     mark(row.detail, shapeProblem);
                 }

@@ -82,15 +82,15 @@ final class RowFilter {
             if (name.isEmpty())
                 continue;
             exact.put(name, c);
-            if (!folded.containsKey(name.toLowerCase()))
-                folded.put(name.toLowerCase(), c);
+            if (!folded.containsKey(name.toLowerCase(java.util.Locale.ROOT)))
+                folded.put(name.toLowerCase(java.util.Locale.ROOT), c);
         }
         boolean[] pass = new boolean[page.rows];
         for (int r = 0; r < page.rows; r++) {
             final int row = r;
             Resolver resolver = new Resolver() {
                 public boolean resolve(String name, boolean columnOnly, Value out) {
-                    String lowered = name.toLowerCase();
+                    String lowered = name.toLowerCase(java.util.Locale.ROOT);
                     if (!columnOnly && (lowered.equals("row") || lowered.equals("i"))) {
                         out.text = String.valueOf(row);
                         return true;
@@ -121,7 +121,7 @@ final class RowFilter {
 
     /** The default expression for a column, quoting a name that would mean something else. */
     static String defaultExpression(String column) {
-        String lowered = column.toLowerCase();
+        String lowered = column.toLowerCase(java.util.Locale.ROOT);
         if (!column.matches("[A-Za-z_][A-Za-z0-9_]*") || lowered.equals("row") || lowered.equals("i")
                 || lowered.equals("true") || lowered.equals("false"))
             column = "[" + column + "]";
@@ -213,7 +213,7 @@ final class RowFilter {
             return out;
         }
         if (kind == Kind.IDENTIFIER) {
-            String lowered = tokenBracketed ? "" : tokenText.toLowerCase();
+            String lowered = tokenBracketed ? "" : tokenText.toLowerCase(java.util.Locale.ROOT);
             if (lowered.equals("true") || lowered.equals("false")) {
                 out.text = lowered.equals("true") ? "1" : "0";
                 out.hasNumber = true;
@@ -234,7 +234,7 @@ final class RowFilter {
     }
 
     private static boolean truth(Value value) {
-        String t = value.text.trim().toLowerCase();
+        String t = value.text.trim().toLowerCase(java.util.Locale.ROOT);
         if (value.hasNumber) {
             if (DECIMAL.matcher(t).matches())
                 return new BigDecimal(t.endsWith(".") ? t.substring(0, t.length() - 1) : t).signum() != 0;

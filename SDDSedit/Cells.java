@@ -216,7 +216,7 @@ final class Cells {
     static double parseDouble(String text) {
         if (NONFINITE.matcher(text).matches()) {
             boolean negative = text.startsWith("-");
-            if (text.toLowerCase().contains("nan"))
+            if (text.toLowerCase(java.util.Locale.ROOT).contains("nan"))
                 return Double.NaN;
             return negative ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
         }
@@ -344,7 +344,7 @@ final class Cells {
                 return null;
             }
         }
-        if (NONFINITE.matcher(t).matches() && !t.toLowerCase().contains("nan"))
+        if (NONFINITE.matcher(t).matches() && !t.toLowerCase(java.util.Locale.ROOT).contains("nan"))
             return t.startsWith("-") ? HUGE.negate() : HUGE;
         return null;
     }

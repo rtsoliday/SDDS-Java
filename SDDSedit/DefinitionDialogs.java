@@ -181,6 +181,9 @@ final class DefinitionDialogs {
         field.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusGained(java.awt.event.FocusEvent e) {
                 spinner.repaint();
+                /* As in a QSpinBox, typing replaces the number unless a click placed the caret. */
+                if (e.getCause() != java.awt.event.FocusEvent.Cause.MOUSE_EVENT)
+                    SwingUtilities.invokeLater(field::selectAll);
             }
 
             public void focusLost(java.awt.event.FocusEvent e) {
@@ -188,27 +191,9 @@ final class DefinitionDialogs {
             }
         });
         /* As typed, so that whatever shows the value keeps up, as with a QSpinBox. */
-        field.getDocument().addDocumentListener(new DocumentListener() {
-            private void typed() {
-                SwingUtilities.invokeLater(new Runnable() {
-                    public void run() {
-                        commit(spinner);
-                    }
-                });
-            }
-
-            public void insertUpdate(DocumentEvent e) {
-                typed();
-            }
-
-            public void removeUpdate(DocumentEvent e) {
-                typed();
-            }
-
-            public void changedUpdate(DocumentEvent e) {
-                typed();
-            }
-        });
+        JFormattedTextField.AbstractFormatter formatter = field.getFormatter();
+        if (formatter instanceof javax.swing.text.DefaultFormatter)
+            ((javax.swing.text.DefaultFormatter) formatter).setCommitsOnValidEdit(true);
         return spinner;
     }
 
@@ -274,7 +259,8 @@ final class DefinitionDialogs {
         private boolean accepted;
 
         Form(Window owner, String title) {
-            super(owner, title, Dialog.ModalityType.DOCUMENT_MODAL);
+            /* Application modal: an array viewer must not change the document under a dialog. */
+            super(owner, title, Dialog.ModalityType.APPLICATION_MODAL);
             setDefaultCloseOperation(DISPOSE_ON_CLOSE);
             grid.setBorder(Flat.pad(14, 16, 12, 16));
         }

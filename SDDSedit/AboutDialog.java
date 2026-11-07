@@ -27,7 +27,9 @@ final class AboutDialog extends JDialog {
         JLabel title = new JLabel("SDDS Editor");
         title.setFont(Theme.uiFont().deriveFont(Font.BOLD, Theme.uiFont().getSize2D() * 1.7f));
         title.setForeground(Theme.t.text);
-        JLabel subtitle = new JLabel("Self Describing Data Sets, lovingly edited");
+        String version = version();
+        JLabel subtitle = new JLabel("Self Describing Data Sets, lovingly edited"
+                + (version == null ? "" : " \u00b7 version " + version));
         subtitle.setFont(Theme.uiFont());
         subtitle.setForeground(Theme.t.muted);
 
@@ -115,6 +117,12 @@ final class AboutDialog extends JDialog {
         AboutDialog dialog = new AboutDialog(owner);
         dialog.setVisible(true);
         dialog.dispose();
+    }
+
+    /** The version in the jar's manifest, or <code>null</code> when not run from a jar. */
+    static String version() {
+        Package p = AboutDialog.class.getPackage();
+        return p == null ? null : p.getImplementationVersion();
     }
 
     private static String hex(Color c) {

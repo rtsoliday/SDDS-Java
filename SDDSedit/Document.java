@@ -70,6 +70,9 @@ final class Document {
         }
     }
 
+    /** The program that writes HDF5. Tests name a stand-in for it. */
+    static String hdfProgram = "sdds2hdf";
+
     final List<Definition> parameters = new ArrayList<Definition>();
     final List<Definition> columns = new ArrayList<Definition>();
     final List<Definition> arrays = new ArrayList<Definition>();
@@ -97,6 +100,17 @@ final class Document {
         d.description = description;
         d.contents = contents;
         return d;
+    }
+
+    /** About how many bytes a snapshot of this document keeps alive. The text itself is shared. */
+    long referenceBytes() {
+        long cells = 0;
+        for (Page p : pages) {
+            cells += p.parameters.length + (long) p.columns.length * p.rows;
+            for (ArrayCells a : p.arrays)
+                cells += a.values.length;
+        }
+        return cells * 4 + pages.size() * 64L;
     }
 
     /** Put back a snapshot, leaving the file settings alone. */
@@ -440,6 +454,7 @@ final class Document {
                 target = throughLinks(target);
             }
         }
+        checkReplaceable(target);
         if (isLocked(target))
             throw new Failure("Output file is locked");
         Path staging;
@@ -458,22 +473,52 @@ final class Document {
                 throw new Failure("The saved file could not be read back: " + check.getErrors().trim());
             if (updateLink) {
                 Files.copy(staged, target);
+                syncToDisk(target);
                 Path newLink = staging.resolve("link");
                 Files.createSymbolicLink(newLink, target);
                 Files.move(newLink, link, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                syncFolder(link.getParent());
             } else {
                 copyPermissions(target, staged);
-                try {
-                    Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException e) {
-                    Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
-                }
+                replace(staged, target);
             }
             return target.toString();
         } catch (IOException e) {
             throw new Failure("Failed to replace " + target + ": " + e.getMessage());
         } finally {
             deleteTree(staging);
+        }
+    }
+
+    /** Renaming over a file needs no write permission on it, so a read-only file is checked here. */
+    private static void checkReplaceable(Path target) throws Failure {
+        if (Files.exists(target) && !Files.isWritable(target))
+            throw new Failure("The existing file is not writable: " + target);
+    }
+
+    /** Swap in a staged file, with its contents safely on disk first, so a crash cannot leave it empty. */
+    private static void replace(Path staged, Path target) throws IOException {
+        syncToDisk(staged);
+        try {
+            Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        syncFolder(target.getParent());
+    }
+
+    private static void syncToDisk(Path file) throws IOException {
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(file, StandardOpenOption.WRITE)) {
+            channel.force(true);
+        }
+    }
+
+    /* Makes a rename durable. Not every system can open a folder, and the rename has still happened. */
+    private static void syncFolder(Path folder) {
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(folder, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException e) {
+            /* Nothing more can be done. */
         }
     }
 
@@ -565,6 +610,7 @@ final class Document {
                 throw new Failure(problem);
         }
         Path target = throughLinks(Paths.get(destination).toAbsolutePath());
+        checkReplaceable(target);
         Path staging = null;
         try {
             /* A new file in a new folder gets the permissions that the user's settings give. */
@@ -618,7 +664,7 @@ final class Document {
                 }
             }
             copyPermissions(target, staged);
-            Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
+            replace(staged, target);
         } catch (IOException e) {
             throw new Failure("Failed while writing CSV output: " + e.getMessage());
         } finally {
@@ -627,7 +673,84 @@ final class Document {
         }
     }
 
+    /**
+     * Export as HDF5 with the toolkit's <code>sdds2hdf</code>. Its output is staged beside
+     * the destination and replaces it only if the program reports no problem, because the
+     * program truncates its output first, and can exit 0 after failing.
+     *
+     * @param destination file to write
+     * @param running     set to the program's process, so that the caller can stop it
+     * @throws Failure with the message to show, leaving any existing file as it was
+     */
+    void exportHDF(String destination, java.util.concurrent.atomic.AtomicReference<Process> running) throws Failure {
+        if (hasEnums())
+            throw new Failure("Convert enum elements to integer codes or label strings before exporting to this format.");
+        Path target = throughLinks(Paths.get(destination).toAbsolutePath());
+        checkReplaceable(target);
+        Path staging;
+        try {
+            staging = Files.createTempDirectory(target.getParent(), ".sddsedit-");
+        } catch (IOException e) {
+            throw new Failure("Failed to create staging directory beside " + target);
+        }
+        try {
+            Path input = staging.resolve("export.sdds");
+            Path staged = staging.resolve(target.getFileName().toString() + ".h5");
+            Path log = staging.resolve("sdds2hdf.log");
+            writeTo(input.toString(), false);
+            Process process;
+            try {
+                process = new ProcessBuilder(hdfProgram, input.toString(), staged.toString()).redirectErrorStream(true)
+                        .redirectOutput(log.toFile()).start();
+            } catch (IOException e) {
+                throw new Failure("HDF export runs the sdds2hdf program, which could not be started. Is it on the PATH?");
+            }
+            running.set(process);
+            int status = process.waitFor();
+            String output = new String(Files.readAllBytes(log), StandardCharsets.UTF_8);
+            if (status != 0)
+                throw new Failure("sdds2hdf failed with exit status " + status + firstLines(output));
+            if (output.contains("HDF5-DIAG") || !Files.exists(staged) || Files.size(staged) == 0)
+                throw new Failure("sdds2hdf could not write the file" + firstLines(output));
+            copyPermissions(target, staged);
+            replace(staged, target);
+        } catch (IOException e) {
+            throw new Failure("Failed to replace " + target + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Failure("HDF export was interrupted");
+        } finally {
+            Process process = running.get();
+            if (process != null)
+                process.destroy();
+            deleteTree(staging);
+        }
+    }
+
+    private static String firstLines(String output) {
+        String[] lines = output.trim().split("\n");
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < lines.length && i < 4; i++)
+            if (!lines[i].trim().isEmpty())
+                text.append('\n').append(lines[i].trim());
+        return text.toString();
+    }
+
     /* ---- shapes ---- */
+
+    /**
+     * True if the library could not read a shape back. It multiplies the sizes in order and
+     * stops if the product gets too large, even when a later zero would leave the array empty.
+     */
+    static boolean shapeTooLarge(int[] dims) {
+        long size = 1;
+        for (int d : dims) {
+            size *= Math.max(d, 0);
+            if (size > Integer.MAX_VALUE - 8)
+                return true;
+        }
+        return false;
+    }
 
     /** The product of dimensions, or -1 if negative or too large. */
     static int product(int[] dims) {

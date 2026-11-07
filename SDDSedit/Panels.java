@@ -510,6 +510,18 @@ final class Panels {
         BandHeader(TableColumnModel model) {
             super(model);
             setOpaque(false);
+            ToolTipManager.sharedInstance().registerComponent(this);
+        }
+
+        public String getToolTipText(MouseEvent event) {
+            int column = columnAtPoint(event.getPoint());
+            if (column < 0 || !(getTable() instanceof CellTable))
+                return null;
+            GridModels.Base grid = ((CellTable) getTable()).grid;
+            if (grid instanceof GridModels.ParameterModel)
+                return null;
+            int index = getColumnModel().getColumn(column).getModelIndex();
+            return index < grid.definitions().size() ? grid.definitions().get(index).toolTip() : null;
         }
 
         protected void paintComponent(Graphics g) {

@@ -407,7 +407,7 @@ final class HelpDialog extends JDialog {
 
     /** Find every match, keeping the current one or starting from the visible text. */
     private void updateMatches(boolean moveToMatch) {
-        String needle = findField.getText().toLowerCase();
+        String needle = findField.getText().toLowerCase(java.util.Locale.ROOT);
         int from = currentMatchStart;
         if (from < 0) {
             Point top = browserScroll.getViewport().getViewPosition();
@@ -419,7 +419,7 @@ final class HelpDialog extends JDialog {
             String text;
             try {
                 javax.swing.text.Document doc = browser.getDocument();
-                text = doc.getText(0, doc.getLength()).toLowerCase();
+                text = doc.getText(0, doc.getLength()).toLowerCase(java.util.Locale.ROOT);
             } catch (BadLocationException e) {
                 text = "";
             }

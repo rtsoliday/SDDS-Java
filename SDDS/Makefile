@@ -1,4 +1,5 @@
 JAVAC=javac
+JAVACFLAGS=--release 11
 JAR=jar
 LIBDIR=../javalib
 CLSDIR=$(LIBDIR)/SDDS
@@ -9,10 +10,10 @@ TARGET=$(LIBDIR)/SDDS.jar
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS)
+$(TARGET): $(SRCS) manifest ../LICENSE
 	@mkdir -p $(CLSDIR)
-	$(JAVAC) -d $(CLSDIR) $(SRCS)
-	$(JAR) cmf manifest $(TARGET) -C $(CLSDIR) SDDS/java/SDDS
+	$(JAVAC) $(JAVACFLAGS) -d $(CLSDIR) $(SRCS)
+	$(JAR) cmf manifest $(TARGET) -C $(CLSDIR) SDDS/java/SDDS -C .. LICENSE
 
 clean:
 	@rm -rf $(CLSDIR) $(TARGET)

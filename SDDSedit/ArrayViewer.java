@@ -47,6 +47,9 @@ final class ArrayViewer extends JDialog {
 
         int currentPage(); // 0-based
 
+        /** The window that this viewer belongs to. */
+        java.awt.Window window();
+
         /** Replace elements of an array on the current page as one undoable step. Returns false if nothing was applied. */
         boolean editArrayCells(int arrayIndex, int[] flatIndexes, String[] texts, String undoLabel);
 
@@ -189,7 +192,7 @@ final class ArrayViewer extends JDialog {
     });
 
     ArrayViewer(Host host, int arrayIndex) {
-        super((Window) null, ModalityType.MODELESS);
+        super(host.window(), ModalityType.MODELESS);
         this.host = host;
         name = host.document().arrays.get(arrayIndex).name;
         readState();
@@ -222,7 +225,9 @@ final class ArrayViewer extends JDialog {
             model.refreshValues();
             updateSelection();
             // Coalesce the edits of a batch into one range scan.
-            if (heatmapChoice.isSelected() && definition.isNumeric())
+            if (heatmapChoice.isEnabled() != definition.isNumeric())
+                updateHeatmap(); // A type change keeps the same Definition, so oldType cannot show it.
+            else if (heatmapChoice.isSelected() && definition.isNumeric())
                 heatmapRefresh.restart();
         } else {
             refresh();
@@ -652,7 +657,13 @@ final class ArrayViewer extends JDialog {
 
     private void updateSelection() {
         int row = leadRow(), column = leadColumn();
-        selection.say(row >= 0 && column >= 0 ? model.describe(row, column) : SELECT_A_CELL);
+        selection.say(row >= 0 && column >= 0 ? oneLine(model.describe(row, column)) : SELECT_A_CELL);
+    }
+
+    /* A long string must not push the grid out of the window. */
+    private static String oneLine(String text) {
+        String flat = text.replace('\n', ' ').replace('\r', ' ');
+        return flat.length() <= 300 ? flat : flat.substring(0, 300) + "\u2026";
     }
 
     /* ---- heatmap ---- */
@@ -1276,7 +1287,10 @@ final class ArrayViewer extends JDialog {
         void setColumnCount(int count) {
             // Rebuilding a large model is much faster than removing its columns one at a time.
             DefaultTableColumnModel next = new DefaultTableColumnModel();
-            next.setSelectionModel(getColumnModel().getSelectionModel());
+            TableColumnModel previous = getColumnModel();
+            next.setSelectionModel(previous.getSelectionModel());
+            // The old model must stop listening to the selection model that it is handing on.
+            previous.setSelectionModel(new DefaultListSelectionModel());
             next.setColumnSelectionAllowed(true);
             for (int i = 0; i < count; i++)
                 next.addColumn(new TableColumn(i, COLUMN_WIDTH));

@@ -31,6 +31,7 @@ import javax.swing.JComboBox;
 import javax.swing.JMenu;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.table.JTableHeader;
 
 /**
  * Drives SDDSedit in a real window. This needs a display, so it is a separate target
@@ -195,6 +196,117 @@ public class SDDSeditGuiTest {
         robot.waitForIdle();
     }
 
+    static void chooseMenu(int menu, String text) {
+        SwingUtilities.invokeLater(() -> {
+            javax.swing.JMenu m = editor.getJMenuBar().getMenu(menu);
+            for (int i = 0; i < m.getItemCount(); i++)
+                if (m.getItem(i) != null && text.equals(m.getItem(i).getText()))
+                    m.getItem(i).doClick();
+        });
+    }
+
+    static <T> T findIn(java.awt.Container c, Class<T> type) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (type.isInstance(k))
+                return type.cast(k);
+            if (k instanceof java.awt.Container) {
+                T found = findIn((java.awt.Container) k, type);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    /* Answers by value, because the standard buttons are labeled in the user's language. */
+    static void answer(Robot robot, java.awt.Dialog dialog, Object value) throws Exception {
+        final javax.swing.JOptionPane pane = findIn(dialog, javax.swing.JOptionPane.class);
+        onSwing(() -> {
+            pane.setValue(value);
+            return null;
+        });
+        robot.delay(150);
+        robot.waitForIdle();
+    }
+
+    static void pickFile(Robot robot, java.awt.Dialog dialog, String path) throws Exception {
+        final javax.swing.JFileChooser chooser = findIn(dialog, javax.swing.JFileChooser.class);
+        onSwing(() -> {
+            chooser.setSelectedFile(new File(path));
+            chooser.approveSelection();
+            return null;
+        });
+        robot.delay(150);
+        robot.waitForIdle();
+    }
+
+    /* Real file dialogs and prompts, which quiet mode does not reach. */
+    static void testFileDialogs(Robot robot) throws Exception {
+        sddsEdit.quietDialogs = false;
+        try {
+            String out = work.resolve("dialogs.sdds").toString();
+            Files.deleteIfExists(Paths.get(out));
+            chooseMenu(0, "Save as...");
+            pickFile(robot, waitForDialog(robot), out);
+            check("Save as writes the chosen file", Files.exists(Paths.get(out)));
+            equal("and it becomes the document's path", out, onSwing(() -> editor.doc.path));
+            long stamp = Files.getLastModifiedTime(Paths.get(out)).toMillis();
+            robot.delay(30);
+            chooseMenu(0, "Save as...");
+            pickFile(robot, waitForDialog(robot), out);
+            java.awt.Dialog ask = waitForDialog(robot);
+            check("replacing a file asks first", ask != null && findIn(ask, javax.swing.JOptionPane.class) != null);
+            answer(robot, ask, Integer.valueOf(javax.swing.JOptionPane.NO_OPTION));
+            equal("declining keeps the file", stamp, Files.getLastModifiedTime(Paths.get(out)).toMillis());
+
+            String csv = work.resolve("dialogs.csv").toString();
+            Files.deleteIfExists(Paths.get(csv));
+            chooseMenu(0, "Export CSV");
+            pickFile(robot, waitForDialog(robot), csv);
+            java.awt.Dialog refused = waitForDialog(robot);
+            String message = String.valueOf(findIn(refused, javax.swing.JOptionPane.class).getMessage());
+            check("CSV explains why enums stop it: " + message, message.contains("Convert enum"));
+            equal("under the Qt editor's title", "Enum export", refused.getTitle());
+            answer(robot, refused, Integer.valueOf(javax.swing.JOptionPane.OK_OPTION));
+            check("and writes nothing", !Files.exists(Paths.get(csv)));
+
+            onSwing(() -> {
+                editor.columnModel.setValueAt("5", 0, 1);
+                return null;
+            });
+            chooseMenu(0, "Open");
+            java.awt.Dialog prompt = waitForDialog(robot);
+            check("unsaved changes are asked about", prompt != null && findIn(prompt, javax.swing.JOptionPane.class) != null);
+            answer(robot, prompt, "Cancel");
+            check("Cancel keeps them", onSwing(() -> editor.dirty));
+            onSwing(() -> {
+                editor.undo();
+                editor.dirty = false;
+                return null;
+            });
+        } finally {
+            sddsEdit.quietDialogs = true;
+        }
+    }
+
+    static java.awt.Dialog waitForDialog(Robot robot) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            java.awt.Dialog found = onSwing(() -> {
+                for (java.awt.Window w : java.awt.Window.getWindows())
+                    if (w instanceof java.awt.Dialog && w.isShowing() && ((java.awt.Dialog) w).isModal())
+                        return (java.awt.Dialog) w;
+                return null;
+            });
+            if (found != null) {
+                robot.delay(200);
+                robot.waitForIdle();
+                return found;
+            }
+            robot.delay(50);
+        }
+        return null;
+    }
+
     /** Real mouse and keyboard events, which go through focus handling and key bindings. */
     static void testRealInput() throws Exception {
         Robot robot = new Robot();
@@ -272,6 +384,50 @@ public class SDDSeditGuiTest {
             editor.undo();
             return null;
         });
+
+        /* F-004: digits typed into a dialog's number field stay in order, and one Enter accepts them. */
+        final Integer[] typedRows = new Integer[1];
+        SwingUtilities.invokeLater(() -> typedRows[0] = EditorDialogs.number(editor, "Insert Rows", "Number of rows", 1, 1, 1000000));
+        waitForDialog(robot);
+        press(robot, KeyEvent.VK_CONTROL, KeyEvent.VK_A);
+        press(robot, KeyEvent.VK_2);
+        press(robot, KeyEvent.VK_5);
+        press(robot, KeyEvent.VK_0);
+        press(robot, KeyEvent.VK_ENTER);
+        robot.delay(200);
+        robot.waitForIdle();
+        equal("typing 250 gives 250", Integer.valueOf(250), onSwing(() -> typedRows[0]));
+        SwingUtilities.invokeLater(() -> typedRows[0] = EditorDialogs.number(editor, "Insert Rows", "Number of rows", 1, 1, 1000000));
+        waitForDialog(robot);
+        press(robot, KeyEvent.VK_3);
+        press(robot, KeyEvent.VK_7);
+        press(robot, KeyEvent.VK_ENTER);
+        robot.delay(200);
+        robot.waitForIdle();
+        equal("typing straight away replaces the number", Integer.valueOf(37), onSwing(() -> typedRows[0]));
+
+        /* F-005: the definition dialogs block an open array viewer. */
+        onSwing(() -> {
+            editor.openArrayViewer(0);
+            return null;
+        });
+        check("a viewer belongs to the main window", onSwing(() -> editor.viewers().get(0).getOwner() == editor));
+        SwingUtilities.invokeLater(() -> editor.insert(DefinitionDialogs.Kind.COLUMN));
+        java.awt.Dialog insertDialog = waitForDialog(robot);
+        check("the insert dialog opens", insertDialog != null);
+        equal("and blocks every other window", java.awt.Dialog.ModalityType.APPLICATION_MODAL, insertDialog.getModalityType());
+        onSwing(() -> {
+            insertDialog.dispose();
+            return null;
+        });
+        robot.delay(100);
+        onSwing(() -> {
+            for (ArrayViewer viewer : new ArrayList<ArrayViewer>(editor.viewers()))
+                viewer.dispose();
+            return null;
+        });
+
+        testFileDialogs(robot);
 
         /* Closing Search keeps what was typed into its match. */
         onSwing(() -> {
@@ -363,6 +519,9 @@ public class SDDSeditGuiTest {
         testTimeDisplay();
         testSaving(name);
         testReviewFindings(name);
+        testAuditFindings(name);
+        testAuditMedium(name);
+        testAuditLow(name);
         testEdgeFiles();
         testExpressionLanguage();
         testNumberText();
@@ -1078,6 +1237,306 @@ public class SDDSeditGuiTest {
         equal("a reflow keeps what was typed", "999", manyPage.parameters[0]);
         editor.setSize(size);
         editor.validate();
+    }
+
+    static void testAuditFindings(String name) throws Exception {
+        CellTable table = editor.columnTable;
+        /* F-001: a read-only file is left alone by every way of writing it. */
+        Path readOnly = work.resolve("readonly.sdds");
+        Files.deleteIfExists(readOnly);
+        editor.loadFile(name);
+        check("save the file to protect", editor.writeFile(readOnly.toString()));
+        byte[] protectedBytes = Files.readAllBytes(readOnly);
+        Files.setPosixFilePermissions(readOnly, java.nio.file.attribute.PosixFilePermissions.fromString("r--r--r--"));
+        editor.columnModel.setValueAt("31", 0, column("x"));
+        sddsEdit.lastWarning = null;
+        check("saving over a read-only file fails", !editor.writeFile(readOnly.toString()));
+        check("and says why", sddsEdit.lastWarning != null && sddsEdit.lastWarning.contains("not writable"));
+        check("the read-only file is untouched", Arrays.equals(protectedBytes, Files.readAllBytes(readOnly)));
+        check("the document stays unsaved", editor.dirty);
+        Document plain = new Document();
+        plain.columns.add(new Definition("a", SDDSUtil.SDDS_DOUBLE));
+        Document.Page page = new Document.Page();
+        page.rows = 1;
+        page.columns = new String[][] { { "1" } };
+        plain.pages.add(page);
+        try {
+            plain.writeCSV(readOnly.toString());
+            check("CSV refuses a read-only file", false);
+        } catch (Document.Failure e) {
+            check("CSV refuses a read-only file", e.getMessage().contains("not writable"));
+        }
+        check("CSV leaves it untouched", Arrays.equals(protectedBytes, Files.readAllBytes(readOnly)));
+        Files.setPosixFilePermissions(readOnly, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+        check("a writable file saves as before", editor.writeFile(readOnly.toString()));
+        editor.undo();
+
+        /* F-003: HDF export replaces nothing unless the program succeeded. */
+        Path h5 = work.resolve("export.h5");
+        byte[] old = "existing file".getBytes(StandardCharsets.UTF_8);
+        java.util.concurrent.atomic.AtomicReference<Process> running = new java.util.concurrent.atomic.AtomicReference<Process>();
+        String program = Document.hdfProgram;
+        try {
+            for (String[] stand : new String[][] { { "/bin/false", "exit status" }, { "/bin/true", "could not write" },
+                    { "/no/such/program", "could not be started" } }) {
+                Files.write(h5, old);
+                Document.hdfProgram = stand[0];
+                try {
+                    plain.exportHDF(h5.toString(), running);
+                    check("HDF export with " + stand[0] + " reports a failure", false);
+                } catch (Document.Failure e) {
+                    check("HDF export with " + stand[0] + " reports a failure: " + e.getMessage(), e.getMessage().contains(stand[1]));
+                }
+                check("and leaves the existing file", Arrays.equals(old, Files.readAllBytes(h5)));
+            }
+            Document.hdfProgram = program;
+            try {
+                plain.exportHDF(work.resolve("no-such-folder").resolve("x.h5").toString(), running);
+                check("HDF export to a missing folder fails", false);
+            } catch (Document.Failure e) {
+                check("HDF export to a missing folder fails", e.getMessage().contains("staging"));
+            }
+            String bin = System.getenv("SDDS_BIN");
+            Path tool = bin != null ? Paths.get(bin, "sdds2hdf") : Paths.get("../../SDDS/bin/Linux-x86_64/sdds2hdf");
+            if (Files.isExecutable(tool)) {
+                Document.hdfProgram = tool.toString();
+                plain.exportHDF(h5.toString(), running);
+                check("the real program replaces the file", !Arrays.equals(old, Files.readAllBytes(h5)) && Files.size(h5) > 100);
+                Document big = new Document();
+                big.columns.add(new Definition("u", SDDSUtil.SDDS_ULONG64));
+                Document.Page bigPage = new Document.Page();
+                bigPage.rows = 1;
+                bigPage.columns = new String[][] { { "18446744073709551615" } };
+                big.pages.add(bigPage);
+                Files.write(h5, old);
+                try {
+                    big.exportHDF(h5.toString(), running);
+                    check("a type the program cannot write is reported", false);
+                } catch (Document.Failure e) {
+                    check("a type the program cannot write is reported", e.getMessage().contains("sdds2hdf"));
+                }
+                check("and the file is kept", Arrays.equals(old, Files.readAllBytes(h5)));
+            }
+        } finally {
+            Document.hdfProgram = program;
+        }
+        check("no HDF staging folder is left", Files.list(work).noneMatch(p -> p.getFileName().toString().startsWith(".sddsedit-")));
+
+        /* F-002: text from a file is never treated as HTML. */
+        String html = work.resolve("html.sdds").toString();
+        SDDSFile f = new SDDSFile(html);
+        f.setMode(false);
+        f.setDescription("<html><b>bold</b></html>", "<html><b>contents</b></html>");
+        f.defineEnumColumn("e", null, null, null, null, "0:<html>A,1:B", 0);
+        f.setColumn(0, new int[] { 0, 1 }, 1, 1);
+        check("write a file with HTML text: " + f.getErrors(), f.writeFile());
+        check("open it", editor.loadFile(html));
+        List<javax.swing.JLabel> labels = new ArrayList<javax.swing.JLabel>();
+        collectLabels(editor.outline, labels);
+        int seen = 0;
+        for (javax.swing.JLabel label : labels) {
+            if (label.getText() != null && label.getText().startsWith("<html>")) {
+                seen++;
+                check("no HTML view for " + label.getText(), label.getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey) == null);
+            }
+        }
+        equal("the description is on show", 1, seen);
+        editor.columnTable.startEditing(0, 0);
+        JComboBox<?> combo = (JComboBox<?>) editor.columnTable.getEditorComponent();
+        java.awt.Component shown = ((javax.swing.ListCellRenderer<Object>) (javax.swing.ListCellRenderer<?>) combo.getRenderer())
+                .getListCellRendererComponent(new javax.swing.JList<Object>(), combo.getItemAt(0), 0, false, false);
+        check("an enum label stays plain text", ((javax.swing.JComponent) shown).getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey) == null);
+        editor.columnTable.removeEditor();
+        equal("a tooltip stays plain text too", " <html>x", Flat.plainTip("<html>x"));
+        equal("ordinary tooltips are unchanged", "x", Flat.plainTip("x"));
+    }
+
+    /** Checks for the medium-severity findings of the release audit. */
+    static void testAuditMedium(String name) throws Exception {
+        /* F-007: undo history stays within its limit, losing only the oldest steps. */
+        check("the editor limits its history", editor.loadFile(name));
+        UndoStack history = editor.undo;
+        long oneStep = 2 * editor.doc.referenceBytes();
+        history.setLimit(oneStep * 3);
+        for (int i = 0; i < 6; i++)
+            editor.sortColumn(column("x"), i % 2 == 0);
+        equal("the oldest steps are dropped", 3, history.undoCount());
+        String sorted = cell(0, "x");
+        editor.undo();
+        check("the newest step can still be undone", !cell(0, "x").equals(sorted));
+        editor.redo();
+        equal("and redone", sorted, cell(0, "x"));
+        history.setLimit(oneStep / 2);
+        editor.sortColumn(column("name"), true);
+        equal("the newest step is always kept", 1, history.undoCount());
+        history.setLimit(Long.MAX_VALUE);
+        history.clear();
+        check("a document has a size to measure", editor.doc.referenceBytes() > 0);
+        java.io.PrintStream stderr = System.err;
+        System.setErr(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+        try {
+            sddsEdit.reportFailure(new OutOfMemoryError("test"));
+            check("running out of memory is explained", sddsEdit.lastWarning != null && sddsEdit.lastWarning.contains("ran out of memory"));
+            sddsEdit.reportFailure(new IllegalStateException("test"));
+            check("other errors are named", sddsEdit.lastWarning != null && sddsEdit.lastWarning.contains("IllegalStateException"));
+        } finally {
+            System.setErr(stderr);
+        }
+        editor.loadFile(name);
+
+        /* F-010: the version agrees wherever it is written. */
+        String manifest = AboutDialog.version();
+        if (manifest != null) {
+            String spec = new String(Files.readAllBytes(Paths.get(System.getProperty("sdds.tests", "tests"), "../rpm/SDDSJava.spec")), StandardCharsets.UTF_8);
+            check("the jar's version matches the RPM's: " + manifest, spec.contains("Version:\t" + manifest + "\n"));
+            String tcl = new String(Files.readAllBytes(Paths.get(System.getProperty("sdds.tests", "tests"), "../rpm/build.tcl")), StandardCharsets.UTF_8);
+            check("and the RPM script's", tcl.contains("set version " + manifest + "\n"));
+            String notes = new String(Files.readAllBytes(Paths.get(System.getProperty("sdds.tests", "tests"), "../RELEASE_NOTES.md")), StandardCharsets.UTF_8);
+            check("and the release notes cover it", notes.contains("## " + manifest + "\n"));
+        }
+
+        /* F-012, F-013: the viewer follows a type change, and long text leaves room for the grid. */
+        Document doc = new Document();
+        Definition array = new Definition("a", SDDSUtil.SDDS_DOUBLE);
+        doc.arrays.add(array);
+        Document.Page page = new Document.Page();
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 20000; i++)
+            longText.append(i % 50 == 49 ? '\n' : 'x');
+        page.arrays = new Document.ArrayCells[] { new Document.ArrayCells(new String[] { "1", "2" }, new int[] { 2 }) };
+        doc.pages.add(page);
+        editor.setDocument(doc);
+        editor.openArrayViewer(0);
+        ArrayViewer viewer = editor.viewers().get(0);
+        viewer.setSize(900, 620);
+        viewer.validate();
+        javax.swing.JCheckBox heatmap = findCheckBox(viewer, "Heatmap");
+        check("a numeric array can have a heatmap", heatmap != null && heatmap.isEnabled());
+        array.type = SDDSUtil.SDDS_STRING;
+        viewer.documentChanged();
+        check("a string array cannot", !heatmap.isEnabled());
+        array.type = SDDSUtil.SDDS_DOUBLE;
+        viewer.documentChanged();
+        check("a numeric array can again", heatmap.isEnabled());
+        array.type = SDDSUtil.SDDS_STRING;
+        page.arrays[0].values[0] = longText.toString();
+        viewer.documentChanged();
+        int gridHeight = viewer.table().getParent().getHeight();
+        viewer.table().changeSelection(0, 0, false, false);
+        viewer.documentChanged();
+        viewer.validate();
+        check("selecting long text leaves the grid its room: " + viewer.table().getParent().getHeight() + " of " + gridHeight,
+                viewer.table().getParent().getHeight() >= gridHeight - 60);
+        viewer.dispose();
+        editor.viewerClosed(viewer);
+
+        /* F-014: tooltips describe definitions, without treating file text as HTML. */
+        editor.loadFile(name);
+        JTableHeader header = editor.columnTable.getTableHeader();
+        Rectangle first = header.getHeaderRect(1);
+        String tip = header.getToolTipText(new MouseEvent(header, MouseEvent.MOUSE_MOVED, 0, 0, first.x + 2, first.y + 2, 0, false));
+        check("a column header names its column: " + tip, tip != null && tip.contains("x (double)") && tip.contains("Units: mm"));
+        Definition time = editor.doc.columns.get(column("Time"));
+        editor.setTimeDisplay(time, Definition.TimeMode.UTC);
+        check("and its time display", time.toolTip().contains("Time display: UTC"));
+        editor.setTimeDisplay(time, Definition.TimeMode.RAW);
+        Definition odd = new Definition("n", SDDSUtil.SDDS_DOUBLE);
+        odd.description = "<img src=x>";
+        check("text in a tooltip is escaped", odd.toolTip().contains("&lt;img src=x&gt;"));
+        CellTable parameters = editor.parameterTable;
+        Rectangle nameCell = parameters.getCellRect(0, 0, false);
+        equal("a parameter's name shows its description", "beam energy",
+                parameters.getToolTipText(new MouseEvent(parameters, MouseEvent.MOUSE_MOVED, 0, 0, nameCell.x + 2, nameCell.y + 2, 0, false)));
+        Rectangle typeCell = parameters.getCellRect(0, 1, false);
+        equal("its type says how to change it", "Double-click to change the type",
+                parameters.getToolTipText(new MouseEvent(parameters, MouseEvent.MOUSE_MOVED, 0, 0, typeCell.x + 2, typeCell.y + 2, 0, false)));
+    }
+
+    /** Checks for the low-severity findings of the release audit. */
+    static void testAuditLow(String name) throws Exception {
+        /* F-015: names and keywords do not depend on the user's locale. */
+        java.util.Locale saved = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(new java.util.Locale("tr"));
+        try {
+            Definition time = new Definition("TIME", SDDSUtil.SDDS_DOUBLE);
+            check("TIME can show dates in any locale", time.canDisplayTime());
+            Expression.Context c = new Expression.Context();
+            c.x = "2";
+            equal("PI in capitals", "3.141592653589793", run("PI", c, SDDSUtil.SDDS_DOUBLE));
+            editor.loadFile(name);
+            editor.setRowFilter("TRUE");
+            equal("TRUE in capitals", 4, editor.columnTable.getRowCount());
+            editor.clearRowFilter();
+        } finally {
+            java.util.Locale.setDefault(saved);
+        }
+
+        /* F-023: a shape that cannot be saved is refused early. */
+        check("sizes too large despite a zero", Document.shapeTooLarge(new int[] { 2147483647, 2147483647, 0 }));
+        check("a large empty shape is fine", !Document.shapeTooLarge(new int[] { 0, 2147483647 }));
+        check("an ordinary shape is fine", !Document.shapeTooLarge(new int[] { 3, 4 }));
+
+        /* F-024: changing axes does not pile up listeners. */
+        Document doc = new Document();
+        Definition array = new Definition("a", SDDSUtil.SDDS_DOUBLE);
+        array.dimensions = 3;
+        doc.arrays.add(array);
+        Document.Page page = new Document.Page();
+        page.arrays = new Document.ArrayCells[] { new Document.ArrayCells(new String[24], new int[] { 2, 3, 4 }) };
+        Arrays.fill(page.arrays[0].values, "1");
+        doc.pages.add(page);
+        editor.setDocument(doc);
+        editor.openArrayViewer(0);
+        ArrayViewer viewer = editor.viewers().get(0);
+        JComboBox<?> axis = findCombo(viewer, "Dimension 0");
+        check("the viewer has axis choices", axis != null);
+        javax.swing.DefaultListSelectionModel selection = (javax.swing.DefaultListSelectionModel) viewer.table().getColumnModel().getSelectionModel();
+        int before = selection.getListSelectionListeners().length;
+        for (int i = 0; i < 20; i++)
+            axis.setSelectedIndex(i % 3);
+        check("listeners stay level: " + before + " then " + selection.getListSelectionListeners().length,
+                selection.getListSelectionListeners().length <= before);
+        viewer.dispose();
+        editor.viewerClosed(viewer);
+        editor.loadFile(name);
+    }
+
+    static JComboBox<?> findCombo(java.awt.Container c, String item) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof JComboBox) {
+                JComboBox<?> box = (JComboBox<?>) k;
+                for (int i = 0; i < box.getItemCount(); i++)
+                    if (item.equals(String.valueOf(box.getItemAt(i))))
+                        return box;
+            }
+            if (k instanceof java.awt.Container) {
+                JComboBox<?> found = findCombo((java.awt.Container) k, item);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    static javax.swing.JCheckBox findCheckBox(java.awt.Container c, String text) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JCheckBox && text.equals(((javax.swing.JCheckBox) k).getText()))
+                return (javax.swing.JCheckBox) k;
+            if (k instanceof java.awt.Container) {
+                javax.swing.JCheckBox found = findCheckBox((java.awt.Container) k, text);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    static void collectLabels(java.awt.Component c, List<javax.swing.JLabel> out) {
+        if (c instanceof javax.swing.JLabel)
+            out.add((javax.swing.JLabel) c);
+        if (c instanceof java.awt.Container)
+            for (java.awt.Component k : ((java.awt.Container) c).getComponents())
+                collectLabels(k, out);
     }
 
     static void testNonFinite() throws Exception {

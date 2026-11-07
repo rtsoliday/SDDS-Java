@@ -172,6 +172,20 @@ final class Flat {
         return history;
     }
 
+    /**
+     * Show a component's text as plain text. Swing treats text starting with "html" in angle
+     * brackets as HTML, and text from a file must not load images or anything else.
+     */
+    static <T extends JComponent> T plainText(T component) {
+        component.putClientProperty("html.disable", Boolean.TRUE);
+        return component;
+    }
+
+    /** A tooltip for text from a file. A tooltip cannot turn HTML off, so the text is changed. */
+    static String plainTip(String text) {
+        return text != null && javax.swing.plaf.basic.BasicHTML.isHTMLString(text) ? " " + text : text;
+    }
+
     /** Give a text field the editor's look. */
     static <T extends JTextField> T field(T text) {
         text.setBorder(new FieldBorder(10, 6));
@@ -380,7 +394,8 @@ final class Flat {
         }
 
         protected ListCellRenderer<Object> createRenderer() {
-            return new BasicComboBoxRenderer.UIResource() {
+            /* Enum labels come from files, so they stay plain text. */
+            return plainText(new BasicComboBoxRenderer.UIResource() {
                 public Component getListCellRendererComponent(JList list, Object value, int index, boolean selected,
                         boolean focus) {
                     Component c = super.getListCellRendererComponent(list, value, index, selected, false);
@@ -390,7 +405,7 @@ final class Flat {
                     setForeground(comboBox != null && !comboBox.isEnabled() ? Theme.t.muted : Theme.t.text);
                     return c;
                 }
-            };
+            });
         }
     }
 

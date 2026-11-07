@@ -170,7 +170,7 @@ final class Expression {
                 int start = pos;
                 while (pos < text.length() && (Character.isLetterOrDigit(text.charAt(pos)) || text.charAt(pos) == '_'))
                     pos++;
-                String name = text.substring(start, pos).toLowerCase();
+                String name = text.substring(start, pos).toLowerCase(java.util.Locale.ROOT);
                 skipSpace();
                 if (match('(')) {
                     T argument = expression();

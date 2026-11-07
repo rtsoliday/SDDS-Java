@@ -532,7 +532,7 @@ public class SDDSUtil {
 	 *         <code>0</code> if invalid<br>
 	 */
 	public static int identifyType(String typeName) {
-		return typeName == null ? 0 : identifyTypeExactly(typeName.toLowerCase());
+		return typeName == null ? 0 : identifyTypeExactly(typeName.toLowerCase(java.util.Locale.ROOT));
 	}
 
 	/**

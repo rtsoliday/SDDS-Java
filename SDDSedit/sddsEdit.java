@@ -163,6 +163,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         super("SDDS Editor");
         commandLine = args;
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+        undo.setLimit(Runtime.getRuntime().maxMemory() / 4);
         addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) {
                 quit();
@@ -263,7 +264,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
     }
 
     private static JLabel statusLabel() {
-        JLabel label = new JLabel();
+        JLabel label = Flat.plainText(new JLabel());
         label.setForeground(Theme.t.muted);
         label.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 6));
         return label;
@@ -560,6 +561,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         parameterPanel.setBody(parameterScroll);
 
         filterChip.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 2));
+        Flat.plainText(filterChipText);
         filterChipText.setBorder(BorderFactory.createEmptyBorder(1, 4, 1, 4));
         filterChipText.setForeground(Theme.t.accentText);
         filterChipText.hoverBg = Theme.t.accentSoft;
@@ -778,6 +780,10 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         return page;
     }
 
+    public Window window() {
+        return this;
+    }
+
     public boolean canUndo() {
         return undo.canUndo();
     }
@@ -826,7 +832,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
     void message(String text) {
         messages.append(text + "\n");
         statusMessage.setText(text);
-        statusMessage.setToolTipText(text);
+        statusMessage.setToolTipText(Flat.plainTip(text));
         statusTimer.restart();
         if (!messagesPanel.isVisible())
             unreadMessages++;
@@ -922,7 +928,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         modifiedLabel.setForeground(dirty ? Theme.t.warn : Theme.t.muted);
         modifiedLabel.setFont(dirty ? Theme.bold(Theme.uiFont()) : Theme.uiFont());
         String path = doc == null ? "No file open" : doc.path == null ? "Untitled" : doc.path;
-        pathLabel.setToolTipText(doc == null ? null : doc.path);
+        pathLabel.setToolTipText(doc == null || doc.path == null ? null : Flat.plainTip(doc.path));
         pathLabel.setText(elideMiddle(path, pathLabel.getFontMetrics(pathLabel.getFont()), 360));
         pageStatusLabel.setText(loaded ? "Page " + number(page + 1) + " of " + number(pageCount) : "");
         pageStatusLabel.setVisible(loaded);
@@ -1119,6 +1125,10 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
 
         public String text() {
             return label;
+        }
+
+        public long size() {
+            return edits.size() * 100L;
         }
     }
 
@@ -1553,6 +1563,10 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         public String text() {
             return label;
         }
+
+        public long size() {
+            return before.referenceBytes() + after.referenceBytes();
+        }
     }
 
     /** Finish a structural change: refresh everything and record it for undo. */
@@ -1832,21 +1846,59 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             loadFile(path);
     }
 
-    private static final class ReadWork extends SwingWorker<Document, Void> {
-        private final String path;
-        private final Runnable finished;
+    private interface Slow<T> {
+        T run() throws Exception;
+    }
 
-        ReadWork(String path, Runnable finished) {
-            this.path = path;
-            this.finished = finished;
-        }
+    /**
+     * Do slow work off the Swing thread. If it takes more than a moment, a modal note says
+     * what is happening, so nothing can change the document meanwhile.
+     *
+     * @param text   the note
+     * @param slow   the work
+     * @param cancel what a Cancel button does, or <code>null</code> for no button
+     * @return the result of the work
+     * @throws java.util.concurrent.ExecutionException if the work fails
+     * @throws InterruptedException                    if this thread is interrupted
+     */
+    private <T> T whileBusy(String text, final Slow<T> slow, final Runnable cancel)
+            throws java.util.concurrent.ExecutionException, InterruptedException {
+        final JDialog progress = new JDialog(this, "SDDS", Dialog.ModalityType.APPLICATION_MODAL);
+        SwingWorker<T, Void> work = new SwingWorker<T, Void>() {
+            protected T doInBackground() throws Exception {
+                return slow.run();
+            }
 
-        protected Document doInBackground() throws Exception {
-            return Document.read(path);
-        }
-
-        protected void done() {
-            finished.run();
+            protected void done() {
+                progress.dispose();
+            }
+        };
+        work.execute();
+        try {
+            return work.get(200, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException stillGoing) {
+            JPanel panel = new JPanel(new BorderLayout(0, 8));
+            panel.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+            panel.add(new JLabel(text), BorderLayout.NORTH);
+            JProgressBar bar = new JProgressBar();
+            bar.setIndeterminate(true);
+            panel.add(bar, BorderLayout.CENTER);
+            if (cancel != null) {
+                JButton stop = Flat.button("Cancel");
+                stop.addActionListener(e -> cancel.run());
+                JPanel row = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+                row.setOpaque(false);
+                row.add(stop);
+                panel.add(row, BorderLayout.SOUTH);
+            }
+            progress.setContentPane(panel);
+            progress.setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+            progress.pack();
+            progress.setSize(Math.max(progress.getWidth(), 360), progress.getHeight());
+            progress.setLocationRelativeTo(this);
+            if (!work.isDone())
+                progress.setVisible(true);
+            return work.get();
         }
     }
 
@@ -1856,34 +1908,10 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
      * @param path file name
      * @return true if it was read
      */
-    public boolean loadFile(String path) {
-        final JDialog progress = new JDialog(this, "SDDS", Dialog.ModalityType.APPLICATION_MODAL);
-        ReadWork work = new ReadWork(path, new Runnable() {
-            public void run() {
-                progress.dispose();
-            }
-        });
-        work.execute();
+    public boolean loadFile(final String path) {
         Document loaded;
         try {
-            try {
-                loaded = work.get(200, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (java.util.concurrent.TimeoutException slow) {
-                JPanel panel = new JPanel(new BorderLayout(0, 8));
-                panel.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
-                panel.add(new JLabel("Loading " + new File(path).getName() + "\u2026"), BorderLayout.NORTH);
-                JProgressBar bar = new JProgressBar();
-                bar.setIndeterminate(true);
-                panel.add(bar, BorderLayout.CENTER);
-                progress.setContentPane(panel);
-                progress.setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-                progress.pack();
-                progress.setSize(Math.max(progress.getWidth(), 360), progress.getHeight());
-                progress.setLocationRelativeTo(this);
-                if (!work.isDone())
-                    progress.setVisible(true);
-                loaded = work.get();
-            }
+            loaded = whileBusy("Loading " + new File(path).getName() + "\u2026", () -> Document.read(path), null);
         } catch (java.util.concurrent.ExecutionException e) {
             String reason = e.getCause() != null && e.getCause().getMessage() != null ? e.getCause().getMessage() : e.toString();
             message("Failed to open " + path + ": " + reason);
@@ -2002,32 +2030,26 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             warn("Enum export", "Convert enum elements to integer codes or label strings before exporting to this format.");
             return;
         }
-        String path = chooseFile("Save HDF", true, exportPath(".h5"), "HDF Files (*.h5 *.hdf)", "h5", "hdf");
+        final String path = chooseFile("Save HDF", true, exportPath(".h5"), "HDF Files (*.h5 *.hdf)", "h5", "hdf");
         if (path == null)
             return;
-        Path snapshot = null;
+        final java.util.concurrent.atomic.AtomicReference<Process> running = new java.util.concurrent.atomic.AtomicReference<Process>();
         try {
-            snapshot = Files.createTempDirectory("sddsedit-hdf");
-            Path input = snapshot.resolve("export.sdds");
-            doc.writeTo(input.toString(), false);
-            Process process = new ProcessBuilder("sdds2hdf", input.toString(), path).redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-            setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-            int status = process.waitFor();
-            if (status != 0)
-                warn("SDDS", "sdds2hdf failed with exit status " + status);
-            else
-                message("Saved " + path);
-        } catch (IOException e) {
-            warn("SDDS", "HDF export runs the sdds2hdf program, which could not be started. Is it on the PATH?");
-        } catch (Document.Failure e) {
-            warn("SDDS", e.getMessage());
+            whileBusy("Exporting " + new File(path).getName() + "\u2026", () -> {
+                doc.exportHDF(path, running);
+                return null;
+            }, () -> {
+                Process process = running.get();
+                if (process != null)
+                    process.destroy();
+            });
+            message("Saved " + path);
+        } catch (java.util.concurrent.ExecutionException e) {
+            String reason = e.getCause() != null ? e.getCause().getMessage() : e.toString();
+            message("HDF export failed: " + reason);
+            warn("SDDS", reason);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } finally {
-            setCursor(Cursor.getDefaultCursor());
-            if (snapshot != null)
-                deleteTree(snapshot);
         }
     }
 
@@ -2648,7 +2670,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
 
     /** Select successive matches in row order, wrapping within the search scope. */
     void findInColumnPanel() {
-        String needle = columnSearch.getText().toLowerCase();
+        String needle = columnSearch.getText().toLowerCase(java.util.Locale.ROOT);
         int rows = columnModel.getRowCount();
         if (needle.isEmpty() || doc == null || rows <= 0 || columnModel.getColumnCount() <= 0)
             return;
@@ -2667,7 +2689,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             int end = offset == rows ? startColumn + 1 : columns.size();
             for (int c = first; c < end; c++) {
                 int column = columns.get(c);
-                if (columnModel.searchText(row, column).toLowerCase().contains(needle)) {
+                if (columnModel.searchText(row, column).toLowerCase(java.util.Locale.ROOT).contains(needle)) {
                     selectingSearchMatch = true;
                     columnTable.selectCell(row, column);
                     selectingSearchMatch = false;
@@ -2752,7 +2774,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         Document.ArrayCells cells = doc.pages.get(page).arrays[array];
         Definition d = doc.arrays.get(array);
         int size = Document.product(dims);
-        if (size < 0) {
+        if (size < 0 || Document.shapeTooLarge(dims)) {
             warn("SDDS", "Array dimensions are too large.");
             return;
         }
@@ -2937,6 +2959,31 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
 
     /* ---- program ---- */
 
+    private static boolean reportingFailure;
+
+    /** Say that something went wrong, because a program started from a desktop has no visible error stream. */
+    static void reportFailure(Throwable error) {
+        final String text = error instanceof OutOfMemoryError
+                ? "Java ran out of memory, so the last action did not finish.\n"
+                        + "Save your work to a new file, then start the editor again with a larger -Xmx setting."
+                : "An internal error stopped the last action:\n" + error;
+        error.printStackTrace();
+        if (quietDialogs) {
+            lastWarning = text;
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            if (reportingFailure)
+                return;
+            reportingFailure = true;
+            try {
+                JOptionPane.showMessageDialog(null, text, "SDDS", JOptionPane.ERROR_MESSAGE);
+            } finally {
+                reportingFailure = false;
+            }
+        });
+    }
+
     /**
      * Run the editor.
      *
@@ -2944,6 +2991,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
      */
     public static void main(final String[] args) {
         standalone = true;
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> reportFailure(error));
         SwingUtilities.invokeLater(new Runnable() {
             public void run() {
                 Theme.install();

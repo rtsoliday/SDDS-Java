@@ -434,6 +434,13 @@ public class SDDSFile {
         return true;
     }
 
+    private static String openProblem(String name) {
+        java.io.File file = new java.io.File(name);
+        if (!file.exists())
+            return "does not exist";
+        return file.isDirectory() ? "is a directory" : "cannot be read";
+    }
+
     /**
      * Open SDDS input file. A file name ending in <code>.gz</code> is read with gzip
      * decompression. One ending in <code>.xz</code> or <code>.lzma</code> is read as
@@ -455,8 +462,7 @@ public class SDDSFile {
                         fis = new FileInputStream(fileName);
                     }
                 } catch (Exception e) {
-                    setError((isURL ? "URL" : "input file") + " does not exist (openInputFile)");
-                    e.printStackTrace();
+                    setError((isURL ? "URL does not exist" : "input file " + openProblem(fileName)) + " (openInputFile)");
                     return false;
                 }
             }
@@ -982,7 +988,8 @@ public class SDDSFile {
             }
             return true;
         } catch (IOException | IllegalArgumentException e) {
-            setError("error reading binary data: " + e.getMessage() + " (readBinaryData)");
+            setError("error reading binary data: " + (e instanceof java.io.EOFException ? "the file ends too soon" : e.getMessage())
+                    + " (readBinaryData)");
         } catch (OutOfMemoryError e) {
             setError("not enough memory to read binary data (readBinaryData)");
         }

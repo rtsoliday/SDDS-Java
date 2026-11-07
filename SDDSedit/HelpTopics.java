@@ -46,7 +46,9 @@ final class HelpTopics {
             + "he selected cells.</li><li><b>Undo</b> <span class=\"key\">&nbsp;Ctrl+Z&nbsp;</span> and <b>"
             + "Redo</b> <span class=\"key\">&nbsp;Ctrl+Shift+Z&nbsp;</span> cover cell edits and structural"
             + " changes such as inserts, deletions, sorts and type changes. The status bar shows the last"
-            + " undoable action. Changing pages clears the Undo history.</li></ul><h3>Parameters</h3><p>P"
+            + " undoable action. Changing pages clears the Undo history. The history keeps as much as fits"
+            + " in about a quarter of the memory available to Java, so very large files may drop their"
+            + " oldest steps.</li></ul><h3>Parameters</h3><p>P"
             + "arameters are listed as Name, Type, Units, Value and Description, in side-by-side groups w"
             + "hen the panel is wide enough; the list runs down each group before the next. Only the valu"
             + "e is edited in the table: double-click the type to change it, or the name, units or descri"
@@ -193,8 +195,9 @@ final class HelpTopics {
             + " in the message log. Open the log with the <b>Messages</b> button or <b>View &#8250; Messa"
             + "ges</b> <span class=\"key\">&nbsp;Ctrl+Shift+L&nbsp;</span>; the button counts unread messag"
             + "es.</li><li>The <b>View</b> menu also shows or hides the toolbar, the status bar, the outl"
-            + "ine and each panel.</li><li>The editor uses a light or dark appearance to match the deskto"
-            + "p.</li><li><b>File &#8250; Restart</b> <span class=\"key\">&nbsp;Ctrl+R&nbsp;</span> restar"
+            + "ine and each panel.</li><li>The editor uses a dark appearance when the desktop reports a da"
+            + "rk GNOME theme at startup. Set <code>SDDSEDIT_THEME</code> to <code>light</code> or <code>d"
+            + "ark</code> to choose.</li><li><b>File &#8250; Restart</b> <span class=\"key\">&nbsp;Ctrl+R&nbsp;</span> restar"
             + "ts the editor after offering to save changes.</li></ul>";
 
     private static final String KEYS =

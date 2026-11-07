@@ -19,21 +19,39 @@ final class UndoStack {
         void redo();
 
         String text();
+
+        /** About how many bytes the command keeps alive. */
+        long size();
     }
 
     private final List<Command> commands = new ArrayList<Command>();
     private int position;
     private final Runnable changed;
+    private long limit = Long.MAX_VALUE;
+    private long total;
 
     UndoStack(Runnable changed) {
         this.changed = changed;
     }
 
+    /** Set how many bytes the history may keep alive. The oldest steps go first, never the newest. */
+    void setLimit(long bytes) {
+        limit = bytes;
+    }
+
+    /** Steps that can be undone now. */
+    int undoCount() {
+        return position;
+    }
+
     /** Add a command that has already been applied, discarding anything to redo. */
     void pushDone(Command command) {
         while (commands.size() > position)
-            commands.remove(commands.size() - 1);
+            total -= commands.remove(commands.size() - 1).size();
         commands.add(command);
+        total += command.size();
+        while (total > limit && commands.size() > 1)
+            total -= commands.remove(0).size();
         position = commands.size();
         changed.run();
     }
@@ -77,6 +95,7 @@ final class UndoStack {
     void clear() {
         commands.clear();
         position = 0;
+        total = 0;
         changed.run();
     }
 }

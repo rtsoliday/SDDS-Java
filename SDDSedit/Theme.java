@@ -241,7 +241,7 @@ final class Theme {
         if (choice != null)
             return choice.equalsIgnoreCase("dark");
         Object name = Toolkit.getDefaultToolkit().getDesktopProperty("gnome.Net/ThemeName");
-        return name != null && name.toString().toLowerCase().contains("dark");
+        return name != null && name.toString().toLowerCase(java.util.Locale.ROOT).contains("dark");
     }
 
     /** Choose the theme and set up Swing to use it. Call once, before making any window. */

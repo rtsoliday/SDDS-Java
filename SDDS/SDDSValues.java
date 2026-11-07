@@ -170,7 +170,7 @@ final class SDDSValues {
      */
     /** The value of text that C reads as NaN or an infinity, in any case, or null for other text. */
     private static Double nonFinite(String text) {
-        String s = text.trim().toLowerCase();
+        String s = text.trim().toLowerCase(java.util.Locale.ROOT);
         boolean negative = s.startsWith("-");
         if (negative || s.startsWith("+"))
             s = s.substring(1);

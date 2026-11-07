@@ -37,8 +37,8 @@ final class Outline extends JPanel {
 
     private final Listener listener;
     private final JLabel fileIcon = new JLabel();
-    private final JLabel fileName = new JLabel();
-    private final JLabel description = new JLabel();
+    private final JLabel fileName = Flat.plainText(new JLabel());
+    private final JLabel description = Flat.plainText(new JLabel());
     private final JLabel pagesValue = new JLabel("-");
     private final JLabel rowsValue = new JLabel("-");
     private final JLabel versionValue = new JLabel("-");
@@ -151,7 +151,7 @@ final class Outline extends JPanel {
         boolean loaded = doc != null && !doc.pages.isEmpty();
         String file = doc == null ? "No file open" : doc.path == null ? "Untitled" : new File(doc.path).getName();
         fileName.setText(file);
-        fileName.setToolTipText(doc == null ? null : doc.path);
+        fileName.setToolTipText(doc == null || doc.path == null ? null : Flat.plainTip(doc.path));
         String text = "";
         if (doc != null && doc.description != null && !doc.description.isEmpty())
             text = doc.description;
@@ -181,7 +181,7 @@ final class Outline extends JPanel {
 
     private void rebuildRows() {
         rows.clear();
-        String wanted = filter.getText().toLowerCase();
+        String wanted = filter.getText().toLowerCase(java.util.Locale.ROOT);
         for (int kind = 0; kind < 3; kind++) {
             Row group = new Row();
             group.kind = kind;
@@ -193,7 +193,7 @@ final class Outline extends JPanel {
             List<Definition> list = definitions.get(kind);
             for (int i = 0; i < list.size(); i++) {
                 Definition d = list.get(i);
-                if (!wanted.isEmpty() && !d.name.toLowerCase().contains(wanted))
+                if (!wanted.isEmpty() && !d.name.toLowerCase(java.util.Locale.ROOT).contains(wanted))
                     continue;
                 Row row = new Row();
                 row.kind = kind;
@@ -248,7 +248,7 @@ final class Outline extends JPanel {
                         repaint();
                     }
                     Row row = i >= 0 && i < rows.size() ? rows.get(i) : null;
-                    setToolTipText(row != null && row.index >= 0 ? row.name : null);
+                    setToolTipText(row != null && row.index >= 0 ? Flat.plainTip(row.name) : null);
                 }
 
                 public void mouseExited(MouseEvent e) {

@@ -70,6 +70,9 @@ final class Definition {
             tip.append("<br>Units: ").append(escape(units));
         if (description != null && !description.isEmpty())
             tip.append("<br>").append(escape(description));
+        if (timeMode != TimeMode.RAW && canDisplayTime())
+            tip.append("<br>Time display: ").append(timeMode == TimeMode.UTC ? "UTC" : "Local")
+                    .append(" (Unix epoch seconds; display only)");
         return tip.append("</html>").toString();
     }
 
@@ -79,11 +82,11 @@ final class Definition {
 
     /** A numeric column with Time in its name, and blank or second units, can show dates. */
     boolean canDisplayTime() {
-        if (!isNumeric() || !name.toLowerCase().contains("time"))
+        if (!isNumeric() || !name.toLowerCase(java.util.Locale.ROOT).contains("time"))
             return false;
         if (units == null || units.trim().isEmpty() || units.trim().equals("s"))
             return true;
-        String u = units.trim().toLowerCase();
+        String u = units.trim().toLowerCase(java.util.Locale.ROOT);
         return u.equals("sec") || u.equals("secs") || u.equals("second") || u.equals("seconds");
     }
 }

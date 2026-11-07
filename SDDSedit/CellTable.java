@@ -244,6 +244,20 @@ final class CellTable extends JTable {
             getCellEditor().stopCellEditing();
     }
 
+    /** A parameter's name shows its description, and its type says how to change it. */
+    public String getToolTipText(MouseEvent event) {
+        if (!(grid instanceof GridModels.ParameterModel))
+            return null;
+        int row = rowAtPoint(event.getPoint()), column = columnAtPoint(event.getPoint());
+        Definition d = row < 0 || column < 0 ? null : grid.definition(row, column);
+        if (d == null)
+            return null;
+        int field = ((GridModels.ParameterModel) grid).fieldAt(column);
+        if (field == GridModels.ParameterModel.TYPE)
+            return "Double-click to change the type";
+        return field == GridModels.ParameterModel.NAME ? Flat.plainTip(d.description) : null;
+    }
+
     public TableCellEditor getCellEditor(int row, int column) {
         return editor;
     }
