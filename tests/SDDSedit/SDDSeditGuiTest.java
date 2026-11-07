@@ -115,6 +115,13 @@ public class SDDSeditGuiTest {
     }
 
     public static void main(String[] args) throws Exception {
+        /* Run as a child by testNoDisplay: a report that cannot show its dialog must not repeat. */
+        if (args.length > 0 && args[0].equals("--report-failure")) {
+            Thread.setDefaultUncaughtExceptionHandler((thread, error) -> sddsEdit.reportFailure(error));
+            sddsEdit.reportFailure(new IllegalStateException("reported once"));
+            Thread.sleep(1500);
+            System.exit(0);
+        }
         String dir = System.getenv("SDDS_TEST_DIR");
         work = dir != null ? Paths.get(dir) : Paths.get(System.getProperty("sdds.tests", "tests"), "build/artifacts");
         Files.createDirectories(work);
@@ -137,6 +144,7 @@ public class SDDSeditGuiTest {
             throw failure[0];
 
         testRealInput();
+        testNoDisplay();
 
         if (args.length > 0) {
             Thread.sleep(800);
@@ -147,6 +155,47 @@ public class SDDSeditGuiTest {
         }
         System.out.println(passed + " passed, " + failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
+    }
+
+    /** Run the program with no usable display: it must stop by itself and say why, briefly. */
+    static String[] runChild(String display, String... command) throws Exception {
+        List<String> line = new ArrayList<String>();
+        line.add(Paths.get(System.getProperty("java.home"), "bin", "java").toString());
+        line.addAll(Arrays.asList(command));
+        ProcessBuilder builder = new ProcessBuilder(line);
+        if (display == null)
+            builder.environment().remove("DISPLAY");
+        else
+            builder.environment().put("DISPLAY", display);
+        builder.environment().remove("WAYLAND_DISPLAY");
+        Path log = work.resolve("child.log");
+        Process process = builder.redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        boolean finished = process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            process.waitFor();
+        }
+        long size = Files.size(log);
+        String text = size < 100000 ? new String(Files.readAllBytes(log), StandardCharsets.UTF_8) : "(" + size + " bytes)";
+        return new String[] { finished ? String.valueOf(process.exitValue()) : "still running", text };
+    }
+
+    static void testNoDisplay() throws Exception {
+        String classes = System.getProperty("java.class.path");
+        String[][] cases = { { null, "-cp", classes, "SDDS.java.SDDSedit.sddsEdit" },
+                { ":98765", "-cp", classes, "SDDS.java.SDDSedit.sddsEdit" },
+                { ":98765", "-Djava.awt.headless=true", "-cp", classes, "SDDS.java.SDDSedit.sddsEdit" } };
+        for (String[] c : cases) {
+            String[] result = runChild(c[0], Arrays.copyOfRange(c, 1, c.length));
+            String label = "with DISPLAY=" + c[0] + (c.length > 4 ? " and headless" : "");
+            equal(label + " the editor exits with an error", "1", result[0]);
+            check(label + " it explains: " + result[1], result[1].contains("needs a graphical display"));
+            check(label + " in a few lines: " + result[1], result[1].split("\n").length <= 3);
+        }
+        String[] report = runChild(null, "-Djava.awt.headless=true", "-cp", classes, "SDDS.java.SDDSedit.SDDSeditGuiTest", "--report-failure");
+        equal("a failure report ends", "0", report[0]);
+        check("and does not repeat: " + report[1].length() + " characters",
+                report[1].split("reported once", -1).length == 2 && !report[1].contains("HeadlessException"));
     }
 
     /** Run something on the Swing thread and return what it found. */

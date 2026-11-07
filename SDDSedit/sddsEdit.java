@@ -2978,10 +2978,30 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             reportingFailure = true;
             try {
                 JOptionPane.showMessageDialog(null, text, "SDDS", JOptionPane.ERROR_MESSAGE);
+            } catch (RuntimeException | Error dialogFailed) {
+                /* The error is already on stderr. Reporting this one too could repeat forever. */
             } finally {
                 reportingFailure = false;
             }
         });
+    }
+
+    /** Stop with a clear message if there is no display to open a window on. */
+    private static void requireDisplay() {
+        String problem = null;
+        try {
+            if (GraphicsEnvironment.isHeadless())
+                problem = "none is available";
+            else
+                GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices();
+        } catch (HeadlessException | AWTError | LinkageError e) {
+            problem = e.getMessage() != null ? e.getMessage().trim() : e.toString();
+        }
+        if (problem != null) {
+            System.err.println("SDDSedit needs a graphical display: " + problem);
+            System.err.println("Check that DISPLAY is set, or connect with ssh -X.");
+            System.exit(1);
+        }
     }
 
     /**
@@ -2991,6 +3011,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
      */
     public static void main(final String[] args) {
         standalone = true;
+        requireDisplay();
         Thread.setDefaultUncaughtExceptionHandler((thread, error) -> reportFailure(error));
         SwingUtilities.invokeLater(new Runnable() {
             public void run() {
