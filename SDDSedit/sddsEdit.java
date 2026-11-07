@@ -1988,7 +1988,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         try {
             String written = doc.save(path);
             dirty = false;
-            message("Saved " + written);
+            reportSaved(written);
             updateTitle();
             return true;
         } catch (Document.Failure e) {
@@ -1996,6 +1996,17 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             warn("SDDS", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Post the message for a finished save or export, including access its replacement could
+     * not keep. That goes in the Saved message, which would otherwise replace a separate one at once.
+     */
+    void reportSaved(String path) {
+        if (doc.accessNotKept == null)
+            message("Saved " + path);
+        else
+            message("Saved " + path + ", but could not keep the group and permissions of " + doc.accessNotKept);
     }
 
     private String exportPath(String suffix) {
@@ -2016,7 +2027,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             return;
         try {
             doc.writeCSV(path);
-            message("Saved " + path);
+            reportSaved(path);
         } catch (Document.Failure e) {
             warn(doc.hasEnums() ? "Enum export" : "SDDS", e.getMessage());
         }
@@ -2044,7 +2055,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
                 if (process != null)
                     process.destroy();
             });
-            message("Saved " + path);
+            reportSaved(path);
         } catch (java.util.concurrent.ExecutionException e) {
             String reason = e.getCause() != null ? e.getCause().getMessage() : e.toString();
             message("HDF export failed: " + reason);

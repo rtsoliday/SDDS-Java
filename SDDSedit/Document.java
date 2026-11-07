@@ -11,11 +11,15 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -87,6 +91,8 @@ final class Document {
     boolean columnMajor = false;
     boolean noRowCounts = false;
     int version = 1;
+    /** The file whose group and permissions the last save or export could not keep, or null. */
+    String accessNotKept;
 
     /** Everything that a structural change can alter, for undoing it. */
     Document snapshot() {
@@ -431,7 +437,10 @@ final class Document {
      * @throws Failure if it cannot be saved, leaving any existing file as it was
      */
     String save(String destination) throws Failure {
-        Path link = Paths.get(destination).toAbsolutePath();
+        accessNotKept = null;
+        Path link = physicalPath(Paths.get(destination));
+        if (link == null)
+            throw new Failure(unresolved(destination));
         Path target = link;
         Path linkText = null;
         Path previousVersion = null;
@@ -439,12 +448,12 @@ final class Document {
         if (Files.isSymbolicLink(link)) {
             try {
                 linkText = Files.readSymbolicLink(link);
-                target = linkTarget(link);
             } catch (IOException e) {
                 throw new Failure("Unable to follow the link " + destination);
             }
-            Matcher versioned = Pattern.compile("(.*?)([.-])(\\d+)$").matcher(target.toString());
-            if (versioned.matches()) {
+            target = linkTarget(link, linkText);
+            Matcher versioned = target == null ? null : Pattern.compile("(.*?)([.-])(\\d+)$").matcher(target.toString());
+            if (versioned != null && versioned.matches()) {
                 previousVersion = target;
                 java.math.BigInteger number = new java.math.BigInteger(versioned.group(3));
                 int width = versioned.group(3).length();
@@ -456,10 +465,12 @@ final class Document {
                     target = Paths.get(versioned.group(1) + versioned.group(2) + digits);
                 } while (Files.exists(target, LinkOption.NOFOLLOW_LINKS));
                 updateLink = true;
-            } else {
-                target = throughLinks(target);
             }
         }
+        if (!updateLink && target != null)
+            target = saveDestination(target);
+        if (target == null)
+            throw new Failure(unresolved(destination));
         checkReplaceable(target);
         if (isLocked(target))
             throw new Failure("Output file is locked");
@@ -479,15 +490,18 @@ final class Document {
                 throw new Failure("The saved file could not be read back: " + check.getErrors().trim());
             if (updateLink) {
                 /* Copied with these attributes, a new version is never more open than the last, even briefly. */
-                copyPermissions(previousVersion, staged);
+                if (!copyPermissions(previousVersion, staged))
+                    accessNotKept = previousVersion.toString();
                 Files.copy(staged, target, StandardCopyOption.COPY_ATTRIBUTES);
                 syncToDisk(target);
                 Path newLink = staging.resolve("link");
-                Files.createSymbolicLink(newLink, linkText.isAbsolute() ? target : linkText.resolveSibling(target.getFileName()));
+                /* The same spelling with the new name, so a relative link stays relative. */
+                Files.createSymbolicLink(newLink, linkText.resolveSibling(target.getFileName()));
                 Files.move(newLink, link, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 syncFolder(link.getParent());
             } else {
-                copyPermissions(target, staged);
+                if (!copyPermissions(target, staged))
+                    accessNotKept = target.toString();
                 replace(staged, target);
             }
             return target.toString();
@@ -499,15 +513,55 @@ final class Document {
     }
 
     /**
-     * The file a link names, in its real folder. The system has to resolve that folder: a
-     * <code>..</code> in a link means the parent of the real folder, which is not the parent
-     * as the path is spelled when a folder on the way is itself a link.
+     * A path with its folder resolved by the system and its last part left as it is, so a
+     * link there is not followed. The system has to resolve that folder: a <code>..</code>
+     * means the parent of the real folder, which is not the parent as the path is spelled
+     * when a folder on the way is itself a link.
+     *
+     * @return null if the system cannot find the folder, since the text without its
+     *         <code>..</code> may still name an unrelated folder that exists
      */
-    private static Path linkTarget(Path link) throws IOException {
-        Path named = link.getParent().resolve(Files.readSymbolicLink(link));
-        if (named.getParent() == null)
-            throw new IOException("The link names no file");
-        return named.getParent().toRealPath().resolve(named.getFileName());
+    private static Path physicalPath(Path path) {
+        Path absolute = path.toAbsolutePath();
+        Path folder = absolute.getParent();
+        if (folder == null || absolute.getFileName() == null)
+            return null;
+        try {
+            return folder.toRealPath().resolve(absolute.getFileName());
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** Where a link at a physical path points, as a physical path, or null if the system cannot find its folder. */
+    private static Path linkTarget(Path link, Path text) {
+        return physicalPath(link.getParent().resolve(text));
+    }
+
+    /**
+     * The file a write to a path must replace, after every link.
+     *
+     * @return null for a loop of links, or when the system cannot find the folder of the path or of a link's target
+     */
+    private static Path saveDestination(Path path) {
+        Path destination = physicalPath(path);
+        for (int links = 0; links < 40 && destination != null; links++) {
+            if (!Files.isSymbolicLink(destination))
+                return destination;
+            try {
+                destination = linkTarget(destination, Files.readSymbolicLink(destination));
+            } catch (IOException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** Why no file to write could be found for a destination. */
+    private static String unresolved(String destination) {
+        return physicalPath(Paths.get(destination)) == null
+                ? "Cannot save " + destination + ": the system cannot find its folder"
+                : "Cannot resolve the symbolic links of " + destination;
     }
 
     /** Renaming over a file needs no write permission on it, so a read-only file is checked here. */
@@ -544,33 +598,64 @@ final class Document {
         }
     }
 
-    /** The file a path finally names, following any chain of links. */
-    private static Path throughLinks(Path path) {
+    /**
+     * Give a new file the mode and group of the one it replaces or follows, so that the same
+     * people can reach it.
+     *
+     * @return false if the group or the mode could not be kept
+     */
+    private static boolean copyPermissions(Path from, Path to) throws IOException {
+        if (!Files.exists(from))
+            return true;
+        PosixFileAttributes old;
         try {
-            return Files.exists(path) ? path.toRealPath() : path;
-        } catch (IOException e) {
-            return path;
+            old = Files.readAttributes(from, PosixFileAttributes.class);
+        } catch (UnsupportedOperationException e) {
+            return true; /* Not every file system has these. */
         }
+        return applyAccess(to, old.group(), old.permissions());
     }
 
     /**
-     * Give a new file the mode and group of the one it replaces or follows, so that the same
-     * people can reach it. The group comes first, because changing it can clear mode bits.
+     * Give a file a group and mode. The group comes first, because changing it can clear mode
+     * bits. Only a member of a group may give it a file, so a file whose group is one its owner
+     * has left cannot keep it. The group the file has then gets only what everyone else had,
+     * so it gains nothing the old group had.
+     *
+     * @return false if the group or the mode could not be given
      */
-    private static void copyPermissions(Path from, Path to) throws IOException {
-        if (!Files.exists(from))
-            return;
+    static boolean applyAccess(Path to, GroupPrincipal group, Set<PosixFilePermission> permissions) {
+        PosixFileAttributeView view = Files.getFileAttributeView(to, PosixFileAttributeView.class);
+        if (view == null)
+            return true;
+        boolean keptGroup;
         try {
-            PosixFileAttributes old = Files.readAttributes(from, PosixFileAttributes.class);
-            try {
-                Files.getFileAttributeView(to, PosixFileAttributeView.class).setGroup(old.group());
-            } catch (IOException e) {
-                /* Only a member of the group may do this. The file then takes this user's group. */
+            keptGroup = view.readAttributes().group().equals(group);
+            if (!keptGroup) {
+                view.setGroup(group);
+                keptGroup = true;
             }
-            Files.setPosixFilePermissions(to, old.permissions());
-        } catch (UnsupportedOperationException e) {
-            /* Not every file system has these. */
+        } catch (IOException e) {
+            keptGroup = false;
         }
+        Set<PosixFilePermission> mode = EnumSet.noneOf(PosixFilePermission.class);
+        mode.addAll(permissions);
+        if (!keptGroup) {
+            mode.removeAll(EnumSet.of(PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_WRITE,
+                    PosixFilePermission.GROUP_EXECUTE));
+            if (permissions.contains(PosixFilePermission.OTHERS_READ))
+                mode.add(PosixFilePermission.GROUP_READ);
+            if (permissions.contains(PosixFilePermission.OTHERS_WRITE))
+                mode.add(PosixFilePermission.GROUP_WRITE);
+            if (permissions.contains(PosixFilePermission.OTHERS_EXECUTE))
+                mode.add(PosixFilePermission.GROUP_EXECUTE);
+        }
+        try {
+            view.setPermissions(mode);
+        } catch (IOException e) {
+            return false;
+        }
+        return keptGroup;
     }
 
     /** True if an SDDS program is writing the file. They hold a lock on it while they do. */
@@ -641,7 +726,10 @@ final class Document {
             if (problem != null)
                 throw new Failure(problem);
         }
-        Path target = throughLinks(Paths.get(destination).toAbsolutePath());
+        accessNotKept = null;
+        Path target = saveDestination(Paths.get(destination));
+        if (target == null)
+            throw new Failure(unresolved(destination));
         checkReplaceable(target);
         Path staging = null;
         try {
@@ -695,7 +783,8 @@ final class Document {
                     }
                 }
             }
-            copyPermissions(target, staged);
+            if (!copyPermissions(target, staged))
+                accessNotKept = target.toString();
             replace(staged, target);
         } catch (IOException e) {
             throw new Failure("Failed while writing CSV output: " + e.getMessage());
@@ -717,7 +806,10 @@ final class Document {
     void exportHDF(String destination, java.util.concurrent.atomic.AtomicReference<Process> running) throws Failure {
         if (hasEnums())
             throw new Failure("Convert enum elements to integer codes or label strings before exporting to this format.");
-        Path target = throughLinks(Paths.get(destination).toAbsolutePath());
+        accessNotKept = null;
+        Path target = saveDestination(Paths.get(destination));
+        if (target == null)
+            throw new Failure(unresolved(destination));
         checkReplaceable(target);
         Path staging;
         try {
@@ -744,7 +836,8 @@ final class Document {
                 throw new Failure("sdds2hdf failed with exit status " + status + firstLines(output));
             if (output.contains("HDF5-DIAG") || !Files.exists(staged) || Files.size(staged) == 0)
                 throw new Failure("sdds2hdf could not write the file" + firstLines(output));
-            copyPermissions(target, staged);
+            if (!copyPermissions(target, staged))
+                accessNotKept = target.toString();
             replace(staged, target);
         } catch (IOException e) {
             throw new Failure("Failed to replace " + target + ": " + e.getMessage());

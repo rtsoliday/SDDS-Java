@@ -581,7 +581,10 @@ public class SDDSeditGuiTest {
         testPlotArguments();
         testPlotSnapshots();
         testLinksThroughLinkedFolders();
+        testLinkChains();
         testSavedFileAccess();
+        testAccessNotKept();
+        testEnumHelp();
         testLargeGridLayout();
         editor.loadFile(name);
     }
@@ -1095,7 +1098,8 @@ public class SDDSeditGuiTest {
         check("a new version exists", Files.exists(work.resolve("data.010")));
         check("the old one stays", Arrays.equals(good, Files.readAllBytes(version)));
         check("the link is still a link", Files.isSymbolicLink(link));
-        equal("and points at the new version", work.resolve("data.010").toAbsolutePath().normalize(), Files.readSymbolicLink(link));
+        equal("and keeps its spelling with the new version", version.toAbsolutePath().resolveSibling("data.010"), Files.readSymbolicLink(link));
+        check("so it points at the new version", Files.isSameFile(link, work.resolve("data.010")));
         check("no stray link is left", Files.exists(link, LinkOption.NOFOLLOW_LINKS));
 
         Path csv = work.resolve("export.csv");
@@ -1350,7 +1354,7 @@ public class SDDSeditGuiTest {
                 plain.exportHDF(work.resolve("no-such-folder").resolve("x.h5").toString(), running);
                 check("HDF export to a missing folder fails", false);
             } catch (Document.Failure e) {
-                check("HDF export to a missing folder fails", e.getMessage().contains("staging"));
+                check("HDF export to a missing folder fails", e.getMessage().endsWith(": the system cannot find its folder"));
             }
             String bin = System.getenv("SDDS_BIN");
             Path tool = bin != null ? Paths.get(bin, "sdds2hdf") : Paths.get("../../SDDS/bin/Linux-x86_64/sdds2hdf");
@@ -1840,6 +1844,145 @@ public class SDDSeditGuiTest {
         Files.createSymbolicLink(root.resolve("real/d/nearlink"), Paths.get("near.sdds"));
         editAndSave(root.resolve("alias/nearlink"));
         check("a link beside its file still saves", holdsEdit(same));
+    }
+
+    private static String text(Path file) throws Exception {
+        return new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1);
+    }
+
+    /** The message of a save that fails, or null if it saves. */
+    private static String saveFailure(Document doc, Path destination) {
+        try {
+            doc.save(destination.toString());
+            return null;
+        } catch (Document.Failure e) {
+            return e.getMessage();
+        }
+    }
+
+    /** Saves and exports go through every link to the file at the end, as the system would, and refuse what it cannot resolve. */
+    static void testLinkChains() throws Exception {
+        Path root = Files.createTempDirectory(work.toAbsolutePath(), "chains-").toRealPath();
+        Path data = smallFile(root.resolve("data.sdds"));
+        Files.createSymbolicLink(root.resolve("second"), Paths.get("data.sdds"));
+        Files.createSymbolicLink(root.resolve("first"), Paths.get("second"));
+        equal("a save through a chain of links names the file at its end", data.toString(), editAndSave(root.resolve("first")));
+        check("and reaches it", holdsEdit(data));
+        check("both links stay links", Files.isSymbolicLink(root.resolve("first")) && Files.isSymbolicLink(root.resolve("second")));
+
+        Files.createSymbolicLink(root.resolve("hop"), Paths.get("missing.sdds"));
+        Files.createSymbolicLink(root.resolve("dangling"), Paths.get("hop"));
+        Document doc = Document.read(data.toString());
+        equal("a chain ending in no file saves", null, saveFailure(doc, root.resolve("dangling")));
+        check("at the end of the chain", holdsEdit(root.resolve("missing.sdds")));
+        check("and the link on the way stays a link", Files.isSymbolicLink(root.resolve("hop")));
+
+        Files.createSymbolicLink(root.resolve("loop1"), Paths.get("loop2"));
+        Files.createSymbolicLink(root.resolve("loop2"), Paths.get("loop1"));
+        Path loop = root.resolve("loop1");
+        equal("a loop of links is refused", "Cannot resolve the symbolic links of " + loop, saveFailure(doc, loop));
+        check("and both stay links", Files.isSymbolicLink(root.resolve("loop1")) && Files.isSymbolicLink(root.resolve("loop2")));
+        try {
+            doc.writeCSV(loop.toString());
+            check("a CSV export into a loop is refused", false);
+        } catch (Document.Failure e) {
+            equal("a CSV export into a loop is refused", "Cannot resolve the symbolic links of " + loop, e.getMessage());
+        }
+        try {
+            doc.exportHDF(loop.toString(), new java.util.concurrent.atomic.AtomicReference<Process>());
+            check("an HDF export into a loop is refused", false);
+        } catch (Document.Failure e) {
+            equal("an HDF export into a loop is refused", "Cannot resolve the symbolic links of " + loop, e.getMessage());
+        }
+        check("and the loop is left alone", Files.isSymbolicLink(root.resolve("loop1")) && Files.isSymbolicLink(root.resolve("loop2")));
+
+        Path csvData = smallFile(root.resolve("table.csv"));
+        Files.createSymbolicLink(root.resolve("tablehop"), Paths.get("table.csv"));
+        Files.createSymbolicLink(root.resolve("table"), Paths.get("tablehop"));
+        doc.writeCSV(root.resolve("table").toString());
+        check("a CSV export through a chain writes the file at its end", text(csvData).startsWith("Columns"));
+        check("and keeps the links", Files.isSymbolicLink(root.resolve("table")) && Files.isSymbolicLink(root.resolve("tablehop")));
+
+        /* alias/.. is real to the system, though the text without ".." names root. */
+        Files.createDirectories(root.resolve("real/d"));
+        Files.createSymbolicLink(root.resolve("alias"), Paths.get("real/d"));
+        Path typed = root.resolve("alias/../typed.sdds");
+        equal("a typed .. means the parent of the real folder", root.resolve("real/typed.sdds").toString(),
+                doc.save(typed.toString()));
+        check("so the file is there", Files.exists(root.resolve("real/typed.sdds")) && !Files.exists(root.resolve("typed.sdds")));
+
+        /* alias/../gone is real/gone, which does not exist, though root/gone does. */
+        Files.createDirectories(root.resolve("gone"));
+        Path lost = root.resolve("alias/../gone/../lost.sdds");
+        equal("a folder the system cannot find is refused", "Cannot save " + lost + ": the system cannot find its folder",
+                saveFailure(doc, lost));
+        check("rather than guessing one from the text", !Files.exists(root.resolve("lost.sdds")));
+
+        /* An absolute link keeps its spelling too, with only the version changed. */
+        Path absolute = Paths.get(root.resolve("alias") + "/../x/abs.001");
+        smallFile(root.resolve("real/x/abs.001"));
+        Files.createSymbolicLink(root.resolve("abs"), absolute);
+        editAndSave(root.resolve("abs"));
+        check("a new version goes where the absolute link pointed", holdsEdit(root.resolve("real/x/abs.002")));
+        equal("and the link keeps its spelling", Paths.get(root.resolve("alias") + "/../x/abs.002"),
+                Files.readSymbolicLink(root.resolve("abs")));
+    }
+
+    /** A group that cannot be kept is reported, and the group the file has gains nothing from it. */
+    static void testAccessNotKept() throws Exception {
+        Path root = Files.createTempDirectory(work.toAbsolutePath(), "foreign-").toRealPath();
+        Path scratch = smallFile(root.resolve("scratch.sdds"));
+        java.nio.file.attribute.PosixFileAttributeView view = Files.getFileAttributeView(scratch,
+                java.nio.file.attribute.PosixFileAttributeView.class);
+        java.nio.file.attribute.GroupPrincipal own = view.readAttributes().group();
+        java.nio.file.attribute.GroupPrincipal foreign = null;
+        Process groups = new ProcessBuilder("id", "-G").redirectErrorStream(true).start();
+        List<String> mine = Arrays.asList(new String(groups.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).trim().split("\\s+"));
+        groups.waitFor();
+        if (!"root".equals(System.getProperty("user.name")) && !mine.contains("0"))
+            foreign = scratch.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByGroupName("root");
+        if (foreign == null) {
+            System.out.println("SKIP: a group that cannot be kept needs an account outside group root");
+        } else {
+            boolean kept = Document.applyAccess(scratch, foreign, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-r--"));
+            check("a group that cannot be kept is reported", !kept);
+            equal("the file keeps its own group", own, view.readAttributes().group());
+            equal("which gets only what others had", java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"),
+                    Files.getPosixFilePermissions(scratch));
+            Document.applyAccess(scratch, foreign, java.nio.file.attribute.PosixFilePermissions.fromString("rwxrwx---"));
+            equal("and nothing when others had nothing", java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"),
+                    Files.getPosixFilePermissions(scratch));
+        }
+        check("a group the file has is kept", Document.applyAccess(scratch, own, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw----")));
+        equal("with the whole mode", java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw----"), Files.getPosixFilePermissions(scratch));
+
+        check("a file to report on loads", editor.loadFile(scratch.toString()));
+        editor.doc.accessNotKept = "/etc/passwd";
+        editor.reportSaved(scratch.toString());
+        equal("the Saved message says what could not be kept",
+                "Saved " + scratch + ", but could not keep the group and permissions of /etc/passwd", editor.statusMessage.getText());
+        check("a save starts with nothing to report", editor.writeFile(scratch.toString()));
+        equal("so its message is plain", "Saved " + scratch, editor.statusMessage.getText());
+        equal("and nothing is left over", null, editor.doc.accessNotKept);
+    }
+
+    /** Help has the Qt editor's enum topic, and the mapping syntax it documents is what the Attributes dialog reads. */
+    static void testEnumHelp() {
+        List<String> anchors = new ArrayList<String>();
+        String enums = null;
+        for (String[] topic : HelpTopics.TOPICS) {
+            anchors.add(topic[0]);
+            if (topic[0].equals("enums"))
+                enums = topic[2];
+        }
+        equal("Help topics follow the Qt editor", Arrays.asList("start", "edit", "structure", "menus", "find", "formula",
+                "arrays", "enums", "export", "status", "keys"), anchors);
+        check("the enum topic gives the escapes", enums != null && enums.contains("<code>\\,</code>, <code>\\:</code> or <code>\\\\</code>"));
+        SDDSEnumDefinition mapping = new SDDSEnumDefinition("0:a\\,b,10:c\\:d,-1:e\\\\f");
+        equal("so a comma, colon and backslash can be written in labels", Arrays.asList("a,b", "c:d", "e\\f"),
+                Arrays.asList(mapping.getEntryLabel(0), mapping.getEntryLabel(1), mapping.getEntryLabel(2)));
+        equal("with their codes", Arrays.asList(0, 10, -1),
+                Arrays.asList(mapping.getEntryCode(0), mapping.getEntryCode(1), mapping.getEntryCode(2)));
     }
 
     /** A new file takes on what the one it follows or replaces allowed. */

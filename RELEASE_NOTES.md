@@ -15,7 +15,9 @@
 
 * Rebuilt to follow the Qt `sddseditor` in layout, menus, shortcuts and behavior. See the README and **Info → Help**.
 * Adds row filters, sorting, search and replace, formula tools, a date display for time columns, an array viewer, CSV export, plotting through `sddsplot`, HDF export through `sdds2hdf`, and the New File dialog.
-* Saves are staged, checked and then swapped in. A read-only file or one locked by an SDDS program is refused. Saving through a link to a versioned file writes a new version. The new file keeps the old one's permissions and, where the system allows, its group, and a relative link stays relative.
+* Saves are staged, checked and then swapped in. A read-only file or one locked by an SDDS program is refused. Saving through a link to a versioned file writes a new version. The new file keeps the old one's permissions and group, and a link keeps its spelling, so a relative link stays relative.
+* Saves and exports follow chains of links to the file at the end, and resolve `..` as the system does. A loop of links or a folder the system cannot find is refused. If a file's group cannot be kept, the Saved message says so and the new file's group gets only what everyone else had.
+* **Info → Help** has an **Enum values** topic, as in the Qt editor.
 * `jsddsEdit` now passes a file name to the editor.
 
 ### Requirements and packaging

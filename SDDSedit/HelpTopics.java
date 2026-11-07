@@ -55,7 +55,7 @@ final class HelpTopics {
             + "ption to open the parameter's attributes. Copy, paste and the formula tools treat paramete"
             + "rs as one list in order. Right-click a parameter and choose <b>Move Up</b> or <b>Move Down"
             + "</b> to reorder parameters.</p><h3>Columns and arrays</h3><p>Each header shows the name wi"
-            + "th a colored type badge (blue for integers, green for floating point, amber for text), the"
+            + "th a colored type badge (blue for integers and enums, green for floating point, amber for text), the"
             + " units and, for arrays, the shape. Hatched cells lie past the end of an array shorter than"
             + " the longest one. Double-click a header to change the type, drag it to reorder, or right-c"
             + "lick it for more actions (see <a href=\"#menus\">Right-click menus</a>).</p><p>Click <b>Clea"
@@ -173,6 +173,33 @@ final class HelpTopics {
             + "nt slice</b> or to a <b>Fixed range</b> (enter Min and Max, then Apply). Gray marks missin"
             + "g, NaN and infinite values. The heatmap changes only the display.</li></ul>";
 
+    private static final String ENUMS =
+            "<p>SDDS6 files can declare parameters, columns and arrays of type <b>enum</b>. Each has it"
+            + "s own mapping of integer codes to labels, such as <code>0:OFF,10:ON,-1:FAULT</code>. The f"
+            + "ile stores the codes; the editor shows and edits the labels.</p><ul><li>Cells show the lab"
+            + "el and its code, such as <code>ON (10)</code>. Editing a cell offers a list of the declare"
+            + "d states in mapping order.</li><li>Typed, pasted, replaced and formula values must match a"
+            + " declared label exactly, including case; otherwise nothing changes. <b>Copy</b> copies th"
+            + "e labels.</li><li><b>Delete</b> leaves enum cells unchanged, since each value must be one "
+            + "of its states. Rows, pages and array elements the editor adds start at the state of code 0"
+            + ". If the mapping has no code 0 they stay blank, and <b>Save</b> names the first cell that "
+            + "still needs a state.</li><li>Sorting orders labels by their UTF-8 bytes, not by code. A ro"
+            + "w filter compares labels as text, never codes: <code>State == \"ON\"</code> matches, and <"
+            + "code>\"01\"</code> and <code>\"1\"</code> are different states.</li><li>Plot shows an enum "
+            + "column's labels as categories, as for a text column. Enum arrays cannot be plotted.</li></"
+            + "ul><h3>Changing the mapping</h3><p>Open the element's <b>Attributes</b> and edit <b>Enum m"
+            + "apping</b>, a comma-separated list of <code>code:label</code> pairs with unique codes and "
+            + "unique labels. Write a comma, colon or backslash in a label as <code>\\,</code>, <code>\\:"
+            + "</code> or <code>\\\\</code>. Values keep their labels, so <code>7:OFF,8:ON,9:FAULT</code> "
+            + "renumbers the states above without changing the data. A mapping that drops a label still "
+            + "in use on any page is refused, and the message names the first value that uses it. A fixe"
+            + "d value must be one of the labels.</p><p>The editor does not create enum elements or chang"
+            + "e their type: the New and Insert dialogs offer no enum type, and an enum's type cannot be "
+            + "changed. Create them with <code>sddsmakedataset -enumValues</code> and convert them to and"
+            + " from other types with <code>sddscast</code>.</p><p class=\"note\">A file with any enum is "
+            + "saved as SDDS6, which SDDS readers older than version 6 cannot read. CSV and HDF export re"
+            + "fuse enum elements; convert them with <code>sddscast</code> first.</p>";
+
     private static final String EXPORT =
             "<h3>Plotting</h3><p>Select a cell in a column or numeric array and click <b>Plot</b> on th"
             + "e toolbar. You can also right-click a column and choose <b>Plot from file</b>, or an array"
@@ -180,18 +207,23 @@ final class HelpTopics {
             + "code> must be on the PATH. For columns, a <code>Time</code> column, if present, is used fo"
             + "r the horizontal axis. Arrays are plotted against the zero-based element index; multidimen"
             + "sional arrays use their stored order, with the last dimension varying fastest. Each page i"
-            + "s plotted separately. Unsaved edits are included. A plot reads a temporary copy of the doc"
-            + "ument, which is removed when the editor closes, so a plot left open after that can no lon"
-            + "ger zoom.</p><h3>Export</h3><ul><li><b>File &#8250"
+            + "s plotted separately. Unsaved edits are included. A plot window zooms by rereading a tempo"
+            + "rary copy of the document, so it can zoom until you close the editor; after that it can st"
+            + "ill be viewed.</p><h3>Export</h3><ul><li><b>File &#8250"
             + "; Export CSV</b> <span class=\"key\">&nbsp;Ctrl+Shift+C&nbsp;</span> writes the data as comm"
             + "a-separated values.</li><li><b>File &#8250; Export HDF</b> <span class=\"key\">&nbsp;Ctrl+Sh"
             + "ift+H&nbsp;</span> writes an HDF5 file by running the external <code>sdds2hdf</code> tool,"
             + " which must be on the PATH.</li></ul><"
             + "p class=\"note\">Saves and exports are written to a temporary file first, so a failure leave"
-            + "s the existing file unchanged. The new file then replaces the old one: it keeps the old fi"
-            + "le's permissions and, where the system allows, its group, but you become its owner, and an"
-            + "y other hard links to the old file keep the old contents. Exporting does not mark the docu"
-            + "ment as saved.</p>";
+            + "s the existing file unchanged. The new file then replaces the old one, so you become its o"
+            + "wner, and any other hard links to the old file keep the old contents. Exporting does not m"
+            + "ark the document as saved.</p><p class=\"note\">Saving or exporting through a symbolic link"
+            + " replaces the file it points to. If a link points to a file whose name ends in a version n"
+            + "umber, such as run.003, a save creates run.004 instead and moves the link to it. On Linux "
+            + "and macOS, a replaced file or new version keeps the permissions and group of the file befo"
+            + "re it, and a relative link stays relative. If the group cannot be kept, the Saved message "
+            + "says so, and the new file's group gets only what everyone else had. A save into a folder t"
+            + "he system cannot find is refused, and so is a loop of links.</p>";
 
     private static final String STATUS =
             "<ul><li>The status bar shows whether the document is saved, the file (hover for the full p"
@@ -238,6 +270,7 @@ final class HelpTopics {
         { "find", "Search and filter", FIND },
         { "formula", "Formulas and fill", FORMULA },
         { "arrays", "Array viewer", ARRAYS },
+        { "enums", "Enum values", ENUMS },
         { "export", "Plotting and export", EXPORT },
         { "status", "Status bar and messages", STATUS },
         { "keys", "Keyboard shortcuts", KEYS },
