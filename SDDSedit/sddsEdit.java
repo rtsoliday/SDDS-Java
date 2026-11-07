@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.TreeSet;
 import javax.swing.*;
@@ -2826,6 +2827,17 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
     }
 
     /** The arguments of sddsplot for one column or array of a snapshot file. */
+    /** The program that plots. Tests name a stand-in for it. */
+    static String plotProgram = "sddsplot";
+
+    /**
+     * Copies of the document that plots read. sddsplot hands a plot to mpl_qt and exits, and
+     * mpl_qt runs sddsplot on the copy again to zoom, so a copy must outlast sddsplot. Each
+     * stays until no running program names it, or the editor closes.
+     */
+    static final List<Path> plotSnapshots = Collections.synchronizedList(new ArrayList<Path>());
+    private static boolean plotCleanupSet;
+
     static List<String> plotArguments(String file, String name, boolean array, boolean hasTime) {
         StringBuilder literal = new StringBuilder();
         for (char c : name.toCharArray()) {
@@ -2834,7 +2846,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
                 literal.append('\\');
             literal.append(c);
         }
-        List<String> args = new ArrayList<String>(Arrays.asList("sddsplot", "-split=page", "-sep=page", file));
+        List<String> args = new ArrayList<String>(Arrays.asList(plotProgram, "-split=page", "-sep=page", file));
         if (array) {
             args.add("-arraynames=" + literal);
         } else if (hasTime) {
@@ -2846,7 +2858,7 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
         return args;
     }
 
-    private void plotData(int index, boolean array) {
+    void plotData(int index, boolean array) {
         if (doc == null)
             return;
         flushEdits();
@@ -2855,38 +2867,62 @@ public final class sddsEdit extends JFrame implements GridModels.Host, ArrayView
             message("Select a numeric array to plot");
             return;
         }
-        Path snapshot;
+        sweepPlotSnapshots();
         Path file;
         try {
-            snapshot = Files.createTempDirectory("sddsedit-plot");
+            Path snapshot = Files.createTempDirectory("sddsedit-plot");
+            keepPlotSnapshot(snapshot);
             file = snapshot.resolve("plot.sdds");
             doc.writeTo(file.toString(), true);
         } catch (IOException | Document.Failure e) {
+            sweepPlotSnapshots();
             warn("SDDS", e.getMessage());
             return;
         }
         boolean hasTime = false;
         for (Definition column : doc.columns)
             hasTime = hasTime || column.name.equals("Time");
-        final Path directory = snapshot;
         try {
-            final Process process = new ProcessBuilder(plotArguments(file.toString(), d.name, array, hasTime))
-                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-            Thread waiter = new Thread(new Runnable() {
-                public void run() {
-                    try {
-                        process.waitFor();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    deleteTree(directory);
-                }
-            }, "sddsplot waiter");
-            waiter.setDaemon(true);
-            waiter.start();
+            new ProcessBuilder(plotArguments(file.toString(), d.name, array, hasTime)).redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
         } catch (IOException e) {
-            deleteTree(directory);
+            sweepPlotSnapshots();
             warn("SDDS", "Failed to start sddsplot");
+        }
+    }
+
+    private static void keepPlotSnapshot(Path directory) {
+        plotSnapshots.add(directory);
+        if (!plotCleanupSet) {
+            plotCleanupSet = true;
+            Runtime.getRuntime().addShutdownHook(new Thread(sddsEdit::deletePlotSnapshots, "plot snapshot cleanup"));
+        }
+    }
+
+    /** Delete the snapshots that no running program names. */
+    static void sweepPlotSnapshots() {
+        List<String> running = new ArrayList<String>();
+        ProcessHandle.allProcesses().forEach(p -> p.info().arguments().ifPresent(a -> running.add(String.join(" ", a))));
+        synchronized (plotSnapshots) {
+            for (Iterator<Path> snapshots = plotSnapshots.iterator(); snapshots.hasNext();) {
+                Path directory = snapshots.next();
+                boolean used = false;
+                for (String line : running)
+                    used = used || line.contains(directory.toString());
+                if (!used) {
+                    deleteTree(directory);
+                    snapshots.remove();
+                }
+            }
+        }
+    }
+
+    /** Delete every snapshot. A plot left open can still be viewed, but can no longer zoom. */
+    static void deletePlotSnapshots() {
+        synchronized (plotSnapshots) {
+            for (Path directory : plotSnapshots)
+                deleteTree(directory);
+            plotSnapshots.clear();
         }
     }
 

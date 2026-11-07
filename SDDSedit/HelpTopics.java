@@ -180,13 +180,18 @@ final class HelpTopics {
             + "code> must be on the PATH. For columns, a <code>Time</code> column, if present, is used fo"
             + "r the horizontal axis. Arrays are plotted against the zero-based element index; multidimen"
             + "sional arrays use their stored order, with the last dimension varying fastest. Each page i"
-            + "s plotted separately. Unsaved edits are included.</p><h3>Export</h3><ul><li><b>File &#8250"
+            + "s plotted separately. Unsaved edits are included. A plot reads a temporary copy of the doc"
+            + "ument, which is removed when the editor closes, so a plot left open after that can no lon"
+            + "ger zoom.</p><h3>Export</h3><ul><li><b>File &#8250"
             + "; Export CSV</b> <span class=\"key\">&nbsp;Ctrl+Shift+C&nbsp;</span> writes the data as comm"
             + "a-separated values.</li><li><b>File &#8250; Export HDF</b> <span class=\"key\">&nbsp;Ctrl+Sh"
             + "ift+H&nbsp;</span> writes an HDF5 file by running the external <code>sdds2hdf</code> tool,"
             + " which must be on the PATH.</li></ul><"
             + "p class=\"note\">Saves and exports are written to a temporary file first, so a failure leave"
-            + "s the existing file unchanged. Exporting does not mark the document as saved.</p>";
+            + "s the existing file unchanged. The new file then replaces the old one: it keeps the old fi"
+            + "le's permissions and, where the system allows, its group, but you become its owner, and an"
+            + "y other hard links to the old file keep the old contents. Exporting does not mark the docu"
+            + "ment as saved.</p>";
 
     private static final String STATUS =
             "<ul><li>The status bar shows whether the document is saved, the file (hover for the full p"

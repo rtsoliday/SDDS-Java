@@ -346,6 +346,7 @@ public class SDDSFile {
                 try {
                     gzos = new GZIPOutputStream(fos, 4096 /* buffsize */);
                 } catch (Exception e) {
+                    closeQuietly(fos);
                     setError("unable to open file in gzip format (openOutputFile)");
                     return false;
                 }
@@ -354,6 +355,7 @@ public class SDDSFile {
                 try {
                     bos = new BufferedOutputStream(SDDSXZ.openOutput(fos), 65536 /* buffsize */);
                 } catch (Exception e) {
+                    closeQuietly(fos);
                     setError("unable to open file in xz format (openOutputFile)");
                     return false;
                 }
@@ -368,9 +370,11 @@ public class SDDSFile {
 
     /**
      * Write out the SDDS file. Every page is checked before the output file is opened,
-     * so a value that cannot be written leaves an existing file alone. A file with no
-     * row counts stays open for {@link #writeRow} if it is plain ascii. Rows cannot be
-     * added to binary or compressed files, so those are always closed here.
+     * so a value that cannot be written leaves an existing file alone. An I/O failure
+     * such as a full disk can still leave it cut short, because it is rewritten in
+     * place. A file with no row counts stays open for {@link #writeRow} if it is plain
+     * ascii. Rows cannot be added to binary or compressed files, so those are always
+     * closed here.
      *
      * @return <code>true</code> if successful<br>
      *         <code>false</code> if an error occurs
@@ -434,6 +438,28 @@ public class SDDSFile {
         return true;
     }
 
+    private static void closeQuietly(java.io.Closeable stream) {
+        if (stream == null)
+            return;
+        try {
+            stream.close();
+        } catch (IOException e) {
+            /* The stream has already failed, and that has been reported. */
+        }
+    }
+
+    /** Close what a failed open left open. A stream the caller supplied stays the caller's to close. */
+    private void closeUnusableInput() {
+        if (isIS)
+            return;
+        if (isURL) {
+            closeQuietly(is);
+            is = null;
+        } else {
+            closeQuietly(fis);
+        }
+    }
+
     private static String openProblem(String name) {
         java.io.File file = new java.io.File(name);
         if (!file.exists())
@@ -480,6 +506,7 @@ public class SDDSFile {
                         source = gzis;
                     }
                 } catch (Exception e) {
+                    closeUnusableInput();
                     setError("input file has an invalid gzip format (openInputFile)");
                     return false;
                 }
@@ -487,6 +514,7 @@ public class SDDSFile {
                 try {
                     source = SDDSXZ.openInput(source);
                 } catch (Exception e) {
+                    closeUnusableInput();
                     setError("input file has an invalid xz format (openInputFile)");
                     return false;
                 }
@@ -978,10 +1006,16 @@ public class SDDSFile {
                         dim[j] = in.readInt();
                     int elements = arrayElements(dim);
                     data.dimensions[i] = dim;
-                    data.arrays[i] = SDDSValues.newArray(type, elements);
-                    for (int j = 0; j < elements; j++)
-                        SDDSValues.readBinary(in, type, data.arrays[i], j, bigEndian,
-                                arrayObject[i].getEnumDefinition());
+                    int capacity = Math.min(elements, FIRST_ALLOCATION);
+                    Object values = SDDSValues.newArray(type, capacity);
+                    for (int j = 0; j < elements; j++) {
+                        if (j == capacity) {
+                            capacity = grown(capacity, elements);
+                            values = SDDSValues.copyOf(values, capacity);
+                        }
+                        SDDSValues.readBinary(in, type, values, j, bigEndian, arrayObject[i].getEnumDefinition());
+                    }
+                    data.arrays[i] = values;
                 }
                 readBinaryColumns(in, data);
                 data.commit(page);
@@ -996,29 +1030,48 @@ public class SDDSFile {
         return false;
     }
 
+    /* Values to make room for before any are read, so a damaged count cannot demand all that memory at once. */
+    private static final int FIRST_ALLOCATION = 65536;
+
+    private static int grown(int capacity, int size) {
+        return (int) Math.min(2L * capacity, size);
+    }
+
     private void readBinaryColumns(DataInput in, PageData data) throws IOException {
         if (columnCount == 0) {
             data.rows = 0;
             return;
         }
-        for (int i = 0; i < columnCount; i++)
-            data.columns[i] = SDDSValues.newArray(columnObject[i].getType(), data.rows);
         if (columnMajorOrder) {
             for (int i = 0; i < columnCount; i++) {
                 int type = columnObject[i].getType();
                 SDDSEnumDefinition definition = columnObject[i].getEnumDefinition();
-                for (int row = 0; row < data.rows; row++)
+                int capacity = Math.min(data.rows, FIRST_ALLOCATION);
+                data.columns[i] = SDDSValues.newArray(type, capacity);
+                for (int row = 0; row < data.rows; row++) {
+                    if (row == capacity) {
+                        capacity = grown(capacity, data.rows);
+                        data.columns[i] = SDDSValues.copyOf(data.columns[i], capacity);
+                    }
                     SDDSValues.readBinary(in, type, data.columns[i], row, bigEndian, definition);
+                }
             }
             return;
         }
+        int capacity = Math.min(data.rows, FIRST_ALLOCATION);
         int[] types = new int[columnCount];
         SDDSEnumDefinition[] definitions = new SDDSEnumDefinition[columnCount];
         for (int i = 0; i < columnCount; i++) {
             types[i] = columnObject[i].getType();
             definitions[i] = columnObject[i].getEnumDefinition();
+            data.columns[i] = SDDSValues.newArray(types[i], capacity);
         }
         for (int row = 0; row < data.rows; row++) {
+            if (row == capacity) {
+                capacity = grown(capacity, data.rows);
+                for (int i = 0; i < columnCount; i++)
+                    data.columns[i] = SDDSValues.copyOf(data.columns[i], capacity);
+            }
             try {
                 for (int i = 0; i < columnCount; i++)
                     SDDSValues.readBinary(in, types[i], data.columns[i], row, bigEndian, definitions[i]);
@@ -1097,6 +1150,7 @@ public class SDDSFile {
             try {
                 if (type == SDDS_STRING) {
                     /* A string parameter is the whole line unless it starts with a quote. */
+                    checkNoNul(line);
                     if (line.endsWith("\r"))
                         line = line.substring(0, line.length() - 1);
                     String text = line.startsWith("\"") ? SDDSText.nextToken(line, new int[] { 0 }) : line;
@@ -1105,6 +1159,7 @@ public class SDDSFile {
                     String token = SDDSText.nextToken(line, new int[] { 0 });
                     if (token == null)
                         throw new NumberFormatException("no value");
+                    checkNoNul(token);
                     SDDSValues.scan(type, token, data.parameters[i], 0, parameterObject[i].getEnumDefinition());
                 }
             } catch (IllegalArgumentException e) {
@@ -1120,8 +1175,8 @@ public class SDDSFile {
             SDDSEnumDefinition definition) {
         String token;
         if (fieldLength != 0) {
-            int size = Math.abs(fieldLength);
-            int end = Math.min(cursor[0] + size, line.length());
+            long size = Math.abs((long) fieldLength);
+            int end = (int) Math.min(cursor[0] + size, line.length());
             token = line.substring(cursor[0], end);
             cursor[0] = end;
             if ((type == SDDS_STRING) && (fieldLength < 0))
@@ -1131,7 +1186,17 @@ public class SDDSFile {
             if (token == null)
                 throw new NumberFormatException("tokenizing error");
         }
+        checkNoNul(token);
         SDDSValues.scan(type, token, data, index, definition);
+    }
+
+    /*
+     * A NUL does not belong in ascii data. To C it ends the line, which usually fails the page;
+     * reading on past it here would turn 2878.25 into 28 with no error.
+     */
+    private static void checkNoNul(String token) {
+        if (token.indexOf('\0') >= 0)
+            throw new IllegalArgumentException("NUL byte in the data");
     }
 
     /** @return <code>false</code> if the data ended before the first array */
@@ -1143,6 +1208,7 @@ public class SDDSFile {
                     return false;
                 throw new IOException("Unable to read array--dimensions missing");
             }
+            checkNoNul(line);
             int[] dim = new int[arrayObject[i].getDimensions()];
             int[] cursor = { 0 };
             for (int j = 0; j < dim.length; j++) {
@@ -1159,9 +1225,9 @@ public class SDDSFile {
             int type = arrayObject[i].getType();
             int fieldLength = arrayObject[i].getField_Length();
             SDDSEnumDefinition definition = arrayObject[i].getEnumDefinition();
-            Object values = SDDSValues.newArray(type, elements);
+            int capacity = Math.min(elements, FIRST_ALLOCATION);
+            Object values = SDDSValues.newArray(type, capacity);
             data.dimensions[i] = dim;
-            data.arrays[i] = values;
             int j = 0;
             while (j < elements) {
                 line = nextLine(dis);
@@ -1170,6 +1236,10 @@ public class SDDSFile {
                 cursor[0] = 0;
                 try {
                     do {
+                        if (j == capacity) {
+                            capacity = grown(capacity, elements);
+                            values = SDDSValues.copyOf(values, capacity);
+                        }
                         scanAsciiValue(type, fieldLength, line, cursor, values, j, definition);
                     } while ((++j < elements) && !SDDSText.isBlank(line, cursor[0]));
                 } catch (IllegalArgumentException e) {
@@ -1177,6 +1247,7 @@ public class SDDSFile {
                             + "--error scanning data element: " + e.getMessage());
                 }
             }
+            data.arrays[i] = values;
         }
         return true;
     }
@@ -1193,6 +1264,7 @@ public class SDDSFile {
                 if (s == null)
                     return false;
             } while (s.charAt(0) == '!');
+            checkNoNul(SDDSText.cutOutComments(s));
             try {
                 rowLimit = SDDSText.scanLong(s);
             } catch (NumberFormatException e) {
@@ -1362,6 +1434,8 @@ public class SDDSFile {
         try {
             dos.close();
         } catch (Exception e) {
+            /* A compressor that cannot finish does not close the file under it. */
+            closeQuietly(fos);
             setError("problem closing output file (closeOutput)");
             return false;
         }

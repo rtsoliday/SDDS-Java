@@ -99,7 +99,7 @@ SDDS6 adds the `enum` type (type ID 12, `SDDSUtil.SDDS_ENUM`) to parameters, arr
 
 `SDDSEnumDefinition` is the dictionary itself: lookups in both directions, `remap`, order-independent `equals`, and `setReaderLimits` for the per-thread header limits (16 MiB per layout command and 1 MiB per mapping by default).
 
-Enums are categorical, so numeric setters and casts reject them, and the generic getters return `SDDSEnumValue` objects rather than numbers. An unset value holds code 0, which is valid only if the dictionary maps it; nothing else is substituted, and `writeFile` refuses to write an unmapped value and names it, leaving any existing file alone.
+Enums are categorical, so numeric setters and casts reject them, and the generic getters return `SDDSEnumValue` objects rather than numbers. An unset value holds code 0, which is valid only if the dictionary maps it; nothing else is substituted, and `writeFile` refuses to write an unmapped value and names it, leaving any existing file alone. An I/O failure such as a full disk is different: `writeFile` returns false, but the file has already been cut short, because it is rewritten in place.
 
 ```java
 SDDSFile file = new SDDSFile("states.sdds");
@@ -136,8 +136,8 @@ $ java -jar javalib/SDDSedit.jar data.sdds
 * **Formulas.** Fill Series, Apply Numerical Expression and Apply Text Formula work on the selected cells. Integers of up to 64 bits are computed exactly, and long double cells keep their digits through `+ - * /`.
 * **Arrays.** **Array viewer** opens a window with any two dimensions as the grid, sliders for the others, and an optional heatmap. Its edits share the main window's undo history.
 * **Definitions.** The insert and attributes dialogs change definitions, and dragging a column or array header reorders it. **File → New** builds a file from nothing.
-* **Saving.** A save is written beside the destination, checked, and only then replaces it, so a failed save leaves the old file as it was. A read-only file, or one locked by an SDDS program, is refused. Saving through a symbolic link to a versioned file such as `data.009` writes `data.010` and moves the link. The save format switch in the toolbar chooses ASCII or binary.
-* **Other programs.** **Plot** runs `sddsplot` on a snapshot. **Export CSV** is built in. **Export HDF** runs `sdds2hdf`, because writing HDF natively needs a library that pure Java does not have, and replaces the destination only if the program succeeds. Both programs must be on the PATH.
+* **Saving.** A save is written beside the destination, checked, and only then replaces it, so a failed save leaves the old file as it was. A read-only file, or one locked by an SDDS program, is refused. Saving through a symbolic link to a versioned file such as `data.009` writes `data.010` and moves the link, which stays relative if it was. The new file keeps the old one's permissions and, where the system allows, its group, but you become its owner, and any other hard links to the old file keep the old contents. The save format switch in the toolbar chooses ASCII or binary.
+* **Other programs.** **Plot** runs `sddsplot` on a snapshot, which is removed when the editor closes, so a plot left open after that can no longer zoom. **Export CSV** is built in. **Export HDF** runs `sdds2hdf`, because writing HDF natively needs a library that pure Java does not have, and replaces the destination only if the program succeeds. Both programs must be on the PATH.
 
 Enum values appear as `label (code)` and are edited by choosing from the states in the dictionary. New rows, pages and array elements start at the state of code 0 if the dictionary maps it. Otherwise they stay blank, and saving names the cell that needs a state. To replace a dictionary, edit **enum values** in an element's attributes: values are converted by label, and the change is refused if a label in use would be lost.
 

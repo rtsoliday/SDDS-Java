@@ -104,6 +104,11 @@ public class SDDS6ConformanceTest {
         roundTrips();
         compression();
         edgePages();
+        fieldLengthOverflow();
+        nulInAsciiData();
+        damagedCounts();
+        largePages();
+        failedOpensClose();
         if (bin != null) {
             cToJava();
             javaToC();
@@ -333,6 +338,180 @@ public class SDDS6ConformanceTest {
             check("and says so: " + text, text.contains("ends too soon"));
         } catch (java.io.IOException e) {
             check("truncated file test: " + e, false);
+        }
+    }
+
+    static byte[] bytes(String text) {
+        return text.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /** A field length near the limit must not overflow when added to the position in the line. */
+    static void fieldLengthOverflow() throws IOException {
+        Path file = work.resolve("field-length.sdds");
+        for (int length : new int[] { 2147483647, -2147483647 }) {
+            String before = "SDDS1\n&column name=a, type=double, &end\n&column name=b, type=string, field_length=";
+            String after = ", &end\n&data mode=ascii, &end\n1\n123 abc\n";
+            Files.write(file, bytes(before + (length < 0 ? -100 : 100) + after));
+            SDDSFile fits = new SDDSFile(file.toString());
+            check("a field that fits reads", fits.readFile());
+            Files.write(file, bytes(before + length + after));
+            try {
+                SDDSFile f = new SDDSFile(file.toString());
+                check("field_length " + length + " reads: " + f.getErrors(), f.readFile());
+                equal("field_length " + length + " gives the rest of the line", fits.getColumnValues(1, 1, false),
+                        f.getColumnValues(1, 1, false));
+            } catch (RuntimeException e) {
+                check("field_length " + length + " must not throw: " + e, false);
+            }
+        }
+    }
+
+    /* A NUL in ascii data is damage. Reading on past it would give a shortened value with no error. */
+    static void nulInAsciiData() throws IOException {
+        String two = "&column name=x, type=double, &end\n&column name=y, type=double, &end\n&data mode=ascii, &end\n1\n";
+        String[][] refused = {
+                { "a double", two + "1.5\0\0 2\n" },
+                { "digits after a NUL", two + "2878\0\0\0\u00805 2\n" },
+                { "an integer", "&column name=x, type=long, &end\n&column name=y, type=long, &end\n&data mode=ascii, &end\n1\n12\0 2\n" },
+                { "a string in a column", "&column name=x, type=string, &end\n&column name=y, type=long, &end\n&data mode=ascii, &end\n1\n\"ab\0cd\" 2\n" },
+                { "an array", "&array name=x, type=double, dimensions=1, &end\n&data mode=ascii, &end\n2\n1.5\0 3\n" },
+                { "a numeric parameter", "&parameter name=x, type=double, &end\n&data mode=ascii, &end\n1.5\0\n" },
+                { "a string parameter", "&parameter name=x, type=string, &end\n&data mode=ascii, &end\nab\0cd\n" },
+                { "a row count", "&column name=x, type=double, &end\n&data mode=ascii, &end\n2\0\n1\n2\n" },
+                { "an array size", "&array name=x, type=double, dimensions=1, &end\n&data mode=ascii, &end\n2\0\n1 2\n" },
+        };
+        Path file = work.resolve("nul.sdds");
+        for (String[] c : refused) {
+            Files.write(file, bytes("SDDS1\n" + c[1]));
+            SDDSFile f = new SDDSFile(file.toString());
+            check("a NUL in " + c[0] + " is refused", !f.readFile());
+            String text = f.getErrors();
+            check("and says so: " + text, text.contains("NUL"));
+        }
+        /* It changes no value, so this is read, although the C reader refuses the file. */
+        Files.write(file, bytes("SDDS1\n" + two + "1.5 2 ! a note \0 here\n"));
+        SDDSFile comment = new SDDSFile(file.toString());
+        check("a NUL in a comment is harmless", comment.readFile());
+        equal("and the values stand", new Object[] { Double.valueOf(1.5) }, comment.getColumnValues(0, 1, false));
+        /* An escape is not damage. It ends the string, as in C. */
+        Files.write(file, bytes("SDDS1\n&column name=s, type=string, &end\n&data mode=ascii, &end\n1\n\"ab\\000cd\"\n"));
+        SDDSFile escaped = new SDDSFile(file.toString());
+        check("an escaped NUL ends a string", escaped.readFile());
+        equal("at that point", new Object[] { "ab" }, escaped.getColumnValues(0, 1, false));
+    }
+
+    private static byte[] little(byte[] head, int... values) {
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(head.length + values.length * 4 + 3)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        b.put(head);
+        for (int v : values)
+            b.putInt(v);
+        return b.array();
+    }
+
+    /** A damaged count in a small file must not demand all that memory before any data is seen. */
+    static void damagedCounts() throws IOException {
+        int huge = 2147483000;
+        String le = "SDDS1\n!# little-endian\n";
+        Object[][] damaged = {
+                { "row count", little(bytes(le + "&column name=x, type=double, &end\n&data mode=binary, &end\n"), huge) },
+                { "row count, column major", little(bytes(le + "&column name=x, type=double, &end\n&data mode=binary, column_major_order=1, &end\n"), huge) },
+                { "array size", little(bytes(le + "&array name=x, type=double, dimensions=1, &end\n&data mode=binary, &end\n"), 0, huge) },
+                { "string length", little(bytes(le + "&column name=x, type=string, &end\n&data mode=binary, &end\n"), 1, huge) },
+        };
+        Path file = work.resolve("damaged.sdds");
+        for (Object[] c : damaged) {
+            Files.write(file, (byte[]) c[1]);
+            SDDSFile f = new SDDSFile(file.toString());
+            check("a damaged " + c[0] + " fails", !f.readFile());
+            String text = f.getErrors();
+            check("because the data ended, not for lack of memory: " + text, text.contains("ends too soon"));
+        }
+        Files.write(file, bytes("SDDS1\n&array name=x, type=double, dimensions=1, &end\n&data mode=ascii, &end\n" + huge + "\n1 2\n"));
+        SDDSFile ascii = new SDDSFile(file.toString());
+        check("a damaged ascii array size fails", !ascii.readFile());
+        String text = ascii.getErrors();
+        check("because the data ended, not for lack of memory: " + text, text.contains("ends prematurely"));
+    }
+
+    /** Pages larger than the first allocation grow to the right size in every layout. */
+    static void largePages() {
+        int n = 200000;
+        double[] x = new double[n];
+        int[] id = new int[n];
+        String[] s = new String[n];
+        for (int i = 0; i < n; i++) {
+            x[i] = i * 0.5;
+            id[i] = i;
+            s[i] = "r" + i;
+        }
+        String name = path("large.sdds");
+        for (String layout : new String[] { "binary", "column major", "ascii" }) {
+            SDDSFile w = new SDDSFile(name);
+            w.setMode(!layout.equals("ascii"));
+            w.columnMajorOrder = layout.equals("column major");
+            w.defineColumn("x", SDDSUtil.SDDS_DOUBLE);
+            w.defineColumn("id", SDDSUtil.SDDS_LONG);
+            w.defineColumn("s", SDDSUtil.SDDS_STRING);
+            w.defineArray("a", SDDSUtil.SDDS_DOUBLE, 1);
+            w.setColumn(0, x, 1, 1);
+            w.setColumn(1, id, 1, 1);
+            w.setColumn(2, s, 1, 1);
+            w.setArrayDim(1, 0, new int[] { n });
+            w.setArray(0, x, 1);
+            check("write large " + layout, w.writeFile());
+            SDDSFile r = read(name);
+            Object[] rx = r.getColumnValues(0, 1, false), rid = r.getColumnValues(1, 1, false), rs = r.getColumnValues(2, 1, false),
+                    ra = r.getArrayValues(0, 1, false);
+            equal("large " + layout + " rows", n, rx.length);
+            equal("large " + layout + " array", n, ra.length);
+            boolean same = rid.length == n && rs.length == n;
+            for (int i = 0; same && i < n; i++)
+                same = ((Number) rx[i]).doubleValue() == x[i] && ((Number) rid[i]).intValue() == i && s[i].equals(rs[i])
+                        && ((Number) ra[i]).doubleValue() == x[i];
+            check("large " + layout + " values", same);
+        }
+    }
+
+    static int openFiles() {
+        return new File("/proc/self/fd").list().length;
+    }
+
+    /** A file that cannot be opened must not leave its descriptor for the garbage collector. */
+    static void failedOpensClose() throws IOException {
+        if (!Files.isDirectory(Paths.get("/proc/self/fd"))) {
+            System.out.println("SKIP: no /proc/self/fd to count open files");
+            return;
+        }
+        Path gz = work.resolve("bad-open.sdds.gz"), xz = work.resolve("bad-open.sdds.xz");
+        Files.write(gz, new byte[] { 0x1f, (byte) 0x8b, 9, 9, 9 });
+        Files.write(xz, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
+        for (Path p : new Path[] { gz, xz }) {
+            int before = openFiles();
+            boolean refused = true;
+            for (int i = 0; i < 100; i++)
+                refused = refused && !new SDDSFile(p.toString()).readFile();
+            check(p.getFileName() + " is refused", refused);
+            int open = openFiles() - before;
+            check(p.getFileName() + " leaves nothing open: " + open, open < 10);
+        }
+        if (Files.exists(Paths.get("/dev/full"))) {
+            for (String suffix : new String[] { "", ".gz", ".xz" }) {
+                Path full = work.resolve("full.sdds" + suffix);
+                Files.deleteIfExists(full);
+                Files.createSymbolicLink(full, Paths.get("/dev/full"));
+                int before = openFiles();
+                boolean refused = true;
+                for (int i = 0; i < 100; i++) {
+                    SDDSFile w = new SDDSFile(full.toString());
+                    w.defineColumn("x", SDDSUtil.SDDS_DOUBLE);
+                    w.setColumn(0, new double[] { 1 }, 1, 1);
+                    refused = refused && !w.writeFile();
+                }
+                check("a full disk is reported for " + suffix, refused);
+                int open = openFiles() - before;
+                check("and leaves nothing open for " + suffix + ": " + open, open < 10);
+            }
         }
     }
 

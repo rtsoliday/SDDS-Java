@@ -298,6 +298,18 @@ final class SDDSValues {
         }
     }
 
+    /** Read in growing steps, so a damaged length cannot demand all that memory before any data is seen. */
+    private static byte[] readBytes(DataInput in, int size) throws IOException {
+        byte[] b = new byte[Math.min(size, 1 << 20)];
+        in.readFully(b);
+        while (b.length < size) {
+            int done = b.length;
+            b = java.util.Arrays.copyOf(b, (int) Math.min(2L * done, size));
+            in.readFully(b, done, b.length - done);
+        }
+        return b;
+    }
+
     /** Read one binary value into storage. */
     static void readBinary(DataInput in, int type, Object data, int index, boolean bigEndian,
             SDDSEnumDefinition definition) throws IOException {
@@ -342,8 +354,7 @@ final class SDDSValues {
                 /* Reported like running out of data, because that is often the cause. */
                 if (size < 0)
                     throw new java.io.EOFException("Invalid string length " + size);
-                byte[] b = new byte[size];
-                in.readFully(b);
+                byte[] b = readBytes(in, size);
                 /* A string ends at a NUL, as it does in C. */
                 int end = 0;
                 while (end < size && b[end] != 0)

@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -431,15 +433,19 @@ final class Document {
     String save(String destination) throws Failure {
         Path link = Paths.get(destination).toAbsolutePath();
         Path target = link;
+        Path linkText = null;
+        Path previousVersion = null;
         boolean updateLink = false;
         if (Files.isSymbolicLink(link)) {
             try {
-                target = link.getParent().resolve(Files.readSymbolicLink(link)).normalize();
+                linkText = Files.readSymbolicLink(link);
+                target = linkTarget(link);
             } catch (IOException e) {
                 throw new Failure("Unable to follow the link " + destination);
             }
             Matcher versioned = Pattern.compile("(.*?)([.-])(\\d+)$").matcher(target.toString());
             if (versioned.matches()) {
+                previousVersion = target;
                 java.math.BigInteger number = new java.math.BigInteger(versioned.group(3));
                 int width = versioned.group(3).length();
                 do {
@@ -472,10 +478,12 @@ final class Document {
             if (!check.readFile())
                 throw new Failure("The saved file could not be read back: " + check.getErrors().trim());
             if (updateLink) {
-                Files.copy(staged, target);
+                /* Copied with these attributes, a new version is never more open than the last, even briefly. */
+                copyPermissions(previousVersion, staged);
+                Files.copy(staged, target, StandardCopyOption.COPY_ATTRIBUTES);
                 syncToDisk(target);
                 Path newLink = staging.resolve("link");
-                Files.createSymbolicLink(newLink, target);
+                Files.createSymbolicLink(newLink, linkText.isAbsolute() ? target : linkText.resolveSibling(target.getFileName()));
                 Files.move(newLink, link, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 syncFolder(link.getParent());
             } else {
@@ -488,6 +496,18 @@ final class Document {
         } finally {
             deleteTree(staging);
         }
+    }
+
+    /**
+     * The file a link names, in its real folder. The system has to resolve that folder: a
+     * <code>..</code> in a link means the parent of the real folder, which is not the parent
+     * as the path is spelled when a folder on the way is itself a link.
+     */
+    private static Path linkTarget(Path link) throws IOException {
+        Path named = link.getParent().resolve(Files.readSymbolicLink(link));
+        if (named.getParent() == null)
+            throw new IOException("The link names no file");
+        return named.getParent().toRealPath().resolve(named.getFileName());
     }
 
     /** Renaming over a file needs no write permission on it, so a read-only file is checked here. */
@@ -508,7 +528,9 @@ final class Document {
     }
 
     private static void syncToDisk(Path file) throws IOException {
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(file, StandardOpenOption.WRITE)) {
+        /* A new version of a read-only file is read-only too, and syncing only needs it open. */
+        OpenOption mode = Files.isWritable(file) ? StandardOpenOption.WRITE : StandardOpenOption.READ;
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(file, mode)) {
             channel.force(true);
         }
     }
@@ -531,11 +553,21 @@ final class Document {
         }
     }
 
+    /**
+     * Give a new file the mode and group of the one it replaces or follows, so that the same
+     * people can reach it. The group comes first, because changing it can clear mode bits.
+     */
     private static void copyPermissions(Path from, Path to) throws IOException {
         if (!Files.exists(from))
             return;
         try {
-            Files.setPosixFilePermissions(to, Files.getPosixFilePermissions(from));
+            PosixFileAttributes old = Files.readAttributes(from, PosixFileAttributes.class);
+            try {
+                Files.getFileAttributeView(to, PosixFileAttributeView.class).setGroup(old.group());
+            } catch (IOException e) {
+                /* Only a member of the group may do this. The file then takes this user's group. */
+            }
+            Files.setPosixFilePermissions(to, old.permissions());
         } catch (UnsupportedOperationException e) {
             /* Not every file system has these. */
         }

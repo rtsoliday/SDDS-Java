@@ -140,8 +140,12 @@ public class SDDSeditGuiTest {
                 failure[0] = e;
             }
         });
-        if (failure[0] != null)
-            throw failure[0];
+        if (failure[0] != null) {
+            /* The open window would keep Java running forever if this thread just ended. */
+            failure[0].printStackTrace();
+            System.out.println(passed + " passed, " + failed + " failed, then stopped by " + failure[0]);
+            System.exit(1);
+        }
 
         testRealInput();
         testNoDisplay();
@@ -575,6 +579,9 @@ public class SDDSeditGuiTest {
         testExpressionLanguage();
         testNumberText();
         testPlotArguments();
+        testPlotSnapshots();
+        testLinksThroughLinkedFolders();
+        testSavedFileAccess();
         testLargeGridLayout();
         editor.loadFile(name);
     }
@@ -1726,6 +1733,171 @@ public class SDDSeditGuiTest {
         check("a string can hold anything but NUL", Cells.valid("a b", SDDSUtil.SDDS_STRING) && !Cells.valid("a\0b", SDDSUtil.SDDS_STRING));
         equal("fixed text escapes", "a\\040b\\042", SDDSUtil.fixedValueText("a b\"", SDDSUtil.SDDS_STRING));
         equal("blank fixed number", "0", SDDSUtil.fixedValueText(" ", SDDSUtil.SDDS_DOUBLE));
+    }
+
+    /** sddsplot exits as soon as it hands a plot to mpl_qt, which reads the snapshot again to zoom. */
+    static void testPlotSnapshots() throws Exception {
+        String program = sddsEdit.plotProgram;
+        check("a file to plot loads", editor.loadFile(makeFile("plotting.sdds")));
+        try {
+            sddsEdit.deletePlotSnapshots();
+            sddsEdit.plotProgram = "/bin/true";
+            editor.plotData(column("x"), false);
+            equal("a plot keeps a snapshot", 1, sddsEdit.plotSnapshots.size());
+            Path snapshot = sddsEdit.plotSnapshots.get(0);
+            Path file = snapshot.resolve("plot.sdds");
+            Thread.sleep(300);
+            check("which outlives the plotting program", Files.exists(file));
+
+            Process reader = new ProcessBuilder("tail", "-f", file.toString()).redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            try {
+                for (int i = 0; i < 50 && !reader.info().arguments().isPresent(); i++)
+                    Thread.sleep(20);
+                sddsEdit.sweepPlotSnapshots();
+                check("a snapshot a running program names stays", Files.exists(file));
+            } finally {
+                reader.destroy();
+                reader.waitFor();
+            }
+            sddsEdit.sweepPlotSnapshots();
+            check("and goes once nothing names it", !Files.exists(snapshot));
+            equal("and is forgotten", 0, sddsEdit.plotSnapshots.size());
+
+            editor.plotData(column("x"), false);
+            snapshot = sddsEdit.plotSnapshots.get(0);
+            sddsEdit.deletePlotSnapshots();
+            check("closing the editor removes snapshots", !Files.exists(snapshot) && sddsEdit.plotSnapshots.isEmpty());
+
+            sddsEdit.plotProgram = "/no/such/program";
+            sddsEdit.lastWarning = null;
+            editor.plotData(column("x"), false);
+            equal("a program that cannot start is reported", "Failed to start sddsplot", sddsEdit.lastWarning);
+            equal("and leaves no snapshot", 0, sddsEdit.plotSnapshots.size());
+
+            sddsEdit.plotProgram = "/bin/true";
+            editor.doc.pages.get(0).columns[column("state")][0] = "";
+            sddsEdit.lastWarning = null;
+            editor.plotData(column("x"), false);
+            check("a document that cannot be written is reported", sddsEdit.lastWarning != null);
+            equal("and leaves no snapshot", 0, sddsEdit.plotSnapshots.size());
+        } finally {
+            sddsEdit.plotProgram = program;
+            sddsEdit.deletePlotSnapshots();
+        }
+    }
+
+    private static Path smallFile(Path file) throws Exception {
+        Files.createDirectories(file.getParent());
+        Files.write(file, "SDDS1\n&column name=x, type=double, &end\n&data mode=ascii, &end\n2\n1\n2\n".getBytes(StandardCharsets.US_ASCII));
+        return file;
+    }
+
+    private static String editAndSave(Path through) throws Exception {
+        Document doc = Document.read(through.toString());
+        doc.pages.get(0).columns[0][0] = "99";
+        return doc.save(through.toString());
+    }
+
+    private static boolean holdsEdit(Path file) throws Exception {
+        return Files.exists(file) && new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1).contains("99");
+    }
+
+    /** A link's ".." means the parent of the real folder, however the path to the link is spelled. */
+    static void testLinksThroughLinkedFolders() throws Exception {
+        Path root = Files.createTempDirectory(work.toAbsolutePath(), "links-").toRealPath();
+        Files.createDirectories(root.resolve("real/d"));
+        Files.createSymbolicLink(root.resolve("alias"), Paths.get("real/d"));
+
+        Path data = smallFile(root.resolve("real/x/data.sdds"));
+        Path decoy = root.resolve("x/data.sdds");
+        Files.createDirectories(decoy.getParent());
+        Files.write(decoy, "an unrelated file".getBytes(StandardCharsets.US_ASCII));
+        Files.createSymbolicLink(root.resolve("real/d/link.sdds"), Paths.get("../x/data.sdds"));
+        equal("a save through a linked folder names the real file", data.toString(), editAndSave(root.resolve("alias/link.sdds")));
+        check("and reaches it", holdsEdit(data));
+        equal("and leaves a file of the same spelling alone", "an unrelated file",
+                new String(Files.readAllBytes(decoy), StandardCharsets.US_ASCII));
+        check("the link stays a link", Files.isSymbolicLink(root.resolve("real/d/link.sdds")));
+
+        Path version = smallFile(root.resolve("real/x/run.001"));
+        Files.createSymbolicLink(root.resolve("real/d/run"), Paths.get("../x/run.001"));
+        editAndSave(root.resolve("alias/run"));
+        check("a new version goes in the real folder", holdsEdit(root.resolve("real/x/run.002")));
+        check("and not in the spelled one", !Files.exists(root.resolve("x/run.002")));
+        check("the old version stays", !holdsEdit(version));
+        equal("a relative link stays relative", Paths.get("../x/run.002"), Files.readSymbolicLink(root.resolve("real/d/run")));
+        check("and reaches the new version", Files.exists(root.resolve("real/x/run.002"))
+                && Files.isSameFile(root.resolve("alias/run"), root.resolve("real/x/run.002")));
+
+        Files.createSymbolicLink(root.resolve("real/d/hop"), Paths.get("../x"));
+        Path deep = smallFile(root.resolve("real/y.sdds"));
+        Files.createSymbolicLink(root.resolve("real/d/deep"), Paths.get("hop/../y.sdds"));
+        editAndSave(root.resolve("alias/deep"));
+        check("a link through a linked folder of its own is followed", holdsEdit(deep));
+
+        Path same = smallFile(root.resolve("real/d/near.sdds"));
+        Files.createSymbolicLink(root.resolve("real/d/nearlink"), Paths.get("near.sdds"));
+        editAndSave(root.resolve("alias/nearlink"));
+        check("a link beside its file still saves", holdsEdit(same));
+    }
+
+    /** A new file takes on what the one it follows or replaces allowed. */
+    static void testSavedFileAccess() throws Exception {
+        Path root = Files.createTempDirectory(work.toAbsolutePath(), "access-").toRealPath();
+        for (String mode : new String[] { "rw-------", "rw-r-----", "r--r--r--" }) {
+            Path folder = Files.createDirectories(root.resolve(mode));
+            Path first = smallFile(folder.resolve("data.001"));
+            Files.setPosixFilePermissions(first, java.nio.file.attribute.PosixFilePermissions.fromString(mode));
+            Files.createSymbolicLink(folder.resolve("current"), Paths.get("data.001"));
+            editAndSave(folder.resolve("current"));
+            equal("a new version keeps mode " + mode, java.nio.file.attribute.PosixFilePermissions.fromString(mode),
+                    Files.getPosixFilePermissions(folder.resolve("data.002")));
+            check("and has the edit, mode " + mode, holdsEdit(folder.resolve("data.002")));
+            editAndSave(folder.resolve("current"));
+            check("the version after it saves too, mode " + mode, holdsEdit(folder.resolve("data.003")));
+            equal("the link stays relative, mode " + mode, Paths.get("data.003"), Files.readSymbolicLink(folder.resolve("current")));
+        }
+
+        Process groups = new ProcessBuilder("id", "-Gn").redirectErrorStream(true).start();
+        String[] names = new String(groups.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).trim().split("\\s+");
+        groups.waitFor();
+        Path shared = smallFile(root.resolve("shared/data.sdds"));
+        java.nio.file.attribute.PosixFileAttributeView view = Files.getFileAttributeView(shared, java.nio.file.attribute.PosixFileAttributeView.class);
+        String own = view.readAttributes().group().getName();
+        String other = null;
+        for (String n : names)
+            if (!n.equals(own))
+                other = n;
+        if (other == null) {
+            System.out.println("SKIP: keeping a file's group needs a second group");
+        } else {
+            java.nio.file.attribute.GroupPrincipal group = shared.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByGroupName(other);
+            view.setGroup(group);
+            Files.setPosixFilePermissions(shared, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw----"));
+            editAndSave(shared);
+            equal("a save keeps the group", other, Files.readAttributes(shared, java.nio.file.attribute.PosixFileAttributes.class).group().getName());
+            equal("and the mode", java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw----"), Files.getPosixFilePermissions(shared));
+
+            Path csv = root.resolve("shared/data.csv");
+            Files.write(csv, "old".getBytes(StandardCharsets.US_ASCII));
+            Files.getFileAttributeView(csv, java.nio.file.attribute.PosixFileAttributeView.class).setGroup(group);
+            Document.read(shared.toString()).writeCSV(csv.toString());
+            equal("a CSV export keeps the group", other, Files.readAttributes(csv, java.nio.file.attribute.PosixFileAttributes.class).group().getName());
+
+            Path firstVersion = smallFile(root.resolve("sharedv/data.001"));
+            Files.getFileAttributeView(firstVersion, java.nio.file.attribute.PosixFileAttributeView.class).setGroup(group);
+            Files.createSymbolicLink(root.resolve("sharedv/current"), Paths.get("data.001"));
+            editAndSave(root.resolve("sharedv/current"));
+            equal("a new version keeps the group", other, Files.readAttributes(root.resolve("sharedv/data.002"), java.nio.file.attribute.PosixFileAttributes.class).group().getName());
+        }
+
+        Path one = smallFile(root.resolve("hard/one.sdds"));
+        Path two = root.resolve("hard/two.sdds");
+        Files.createLink(two, one);
+        editAndSave(one);
+        check("the saved name has the edit", holdsEdit(one));
+        check("another hard link keeps the old contents, as the guide says", !holdsEdit(two));
     }
 
     static void testPlotArguments() {
