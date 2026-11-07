@@ -39,3 +39,4 @@ Add durable repo-specific instructions here.
 
 - Run `make test` after library changes and `make test-gui` after SDDSedit changes. The tests also check interchange with the C tools in `../SDDS/bin/Linux-x86_64`.
 - SDDS6 behavior follows `../SDDS/SDDSlib/doc/enums.md` and the C library. `tests/fixtures/enums` is a copy of `../SDDS/SDDSlib/testdata/enums`; refresh it when those fixtures change.
+- SDDSedit mimics the Qt editor in `../SDDS/SDDSaps/sddseditor`: its layout, menus, shortcuts and behavior follow that source, so check there first when changing it. Keep the sources ASCII (`\uXXXX` for anything else), because the Makefiles set no encoding.

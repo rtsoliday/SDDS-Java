@@ -93,6 +93,7 @@ public class SDDS6ConformanceTest {
         fixtureContents(tests.resolve("fixtures/enums"));
         namelist();
         setters();
+        nonFiniteText();
         conversions();
         versions();
         longDouble();
@@ -293,6 +294,31 @@ public class SDDS6ConformanceTest {
     }
 
     /** Assignments validate membership and numbers are not codes. */
+    /* Text reaches doubles and floats as C reads it, and never silently becomes 0. */
+    static void nonFiniteText() {
+        SDDSFile f = new SDDSFile();
+        f.defineColumn("d", SDDSUtil.SDDS_DOUBLE);
+        f.defineColumn("f", SDDSUtil.SDDS_FLOAT);
+        f.defineParameter("p", SDDSUtil.SDDS_DOUBLE);
+        String[] text = { "nan", "NaN", "-nan", "inf", "+inf", "-inf", "Infinity", "-INFINITY", "2.5" };
+        check("set doubles from text: " + f.getErrors(), f.setColumn(0, text, 1, 1));
+        check("set floats from text: " + f.getErrors(), f.setColumn(1, text, 1, 1));
+        check("set a parameter from text: " + f.getErrors(), f.setParameter(0, "-inf", 1));
+        Object[] d = f.getColumnValues(0, 1, false), s = f.getColumnValues(1, 1, false);
+        for (int i = 0; i < 3; i++) {
+            check("double from " + text[i], ((Double) d[i]).isNaN());
+            check("float from " + text[i], ((Float) s[i]).isNaN());
+        }
+        for (int i = 3; i < 8; i++) {
+            double expected = text[i].startsWith("-") ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+            equal("double from " + text[i], expected, d[i]);
+            equal("float from " + text[i], (float) expected, s[i]);
+        }
+        equal("an ordinary double", 2.5, d[8]);
+        equal("an ordinary float", 2.5f, s[8]);
+        equal("a parameter", Double.NEGATIVE_INFINITY, f.getParameterValue(0, 1, false));
+    }
+
     static void setters() {
         SDDSFile f = layoutWithEnums();
         check("set column codes", f.setColumn(0, new int[] { 0, 10, -1 }, 1, 1));

@@ -127,12 +127,23 @@ Limits of a pure Java implementation:
 ## SDDSedit – graphical editor
 
 ```bash
-$ java -jar javalib/SDDSedit.jar
+$ java -jar javalib/SDDSedit.jar data.sdds
 ```
 
-`SDDSedit` lets you inspect headers, browse pages, add/delete rows, and edit parameter or column values in place. Use **File → Save As** to write a new SDDS file once your edits are complete.
+`SDDSedit` is modeled on the Qt `sddseditor` in the SDDS toolkit: the same layout, menus, shortcuts and behavior, in pure Java. **Info → Help** (F1) has the full guide, and it is searchable.
+
+* **Panels.** Parameters, columns and arrays each have a panel that can be collapsed and resized. Parameters wrap into side-by-side groups, and column headers show each type and its units. The outline on the left summarizes the file and jumps to any definition.
+* **Editing.** A click edits a cell, and typing replaces its text. Ctrl-click, Shift-click and dragging select cells, disconnected ones too, and Esc clears the selection. Copy and paste use tab-separated text. Undo and redo cover cell edits and structural changes, but history does not cross a page change. Values are checked against their type.
+* **Rows.** Sort, insert and delete rows, or use **Filter rows** to view only rows that pass an expression such as `x>0 && Status=="OK"`. This never changes the file. A numeric column with Time in its name can display as a local or UTC date.
+* **Formulas.** Fill Series, Apply Numerical Expression and Apply Text Formula work on the selected cells. Integers of up to 64 bits are computed exactly, and long double cells keep their digits through `+ - * /`.
+* **Arrays.** **Array viewer** opens a window with any two dimensions as the grid, sliders for the others, and an optional heatmap. Its edits share the main window's undo history.
+* **Definitions.** The insert and attributes dialogs change definitions, and dragging a column or array header reorders it. **File → New** builds a file from nothing.
+* **Saving.** A save is written beside the destination, checked, and only then replaces it, so a failed save leaves the old file as it was. Saving through a symbolic link to a versioned file such as `data.009` writes `data.010` and moves the link. The save format switch in the toolbar chooses ASCII or binary.
+* **Other programs.** **Plot** runs `sddsplot` on a snapshot. **Export CSV** is built in. **Export HDF** runs `sdds2hdf`, because writing HDF natively needs a library that pure Java does not have. Both programs must be on the PATH.
 
 Enum values appear as `label (code)` and are edited by choosing from the states in the dictionary. New rows, pages and array elements start at the state of code 0 if the dictionary maps it. Otherwise they stay blank, and saving names the cell that needs a state. To replace a dictionary, edit **enum values** in an element's attributes: values are converted by label, and the change is refused if a label in use would be lost.
+
+The window follows a dark desktop theme where the toolkit reports one. Set `SDDSEDIT_THEME` or the `sddsedit.theme` property to `light` or `dark` to choose.
 
 ---
 

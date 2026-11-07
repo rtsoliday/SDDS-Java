@@ -168,6 +168,19 @@ final class SDDSValues {
      * For other numeric types text that does not parse becomes zero, which is what
      * this library has always done for these setters.
      */
+    /** The value of text that C reads as NaN or an infinity, in any case, or null for other text. */
+    private static Double nonFinite(String text) {
+        String s = text.trim().toLowerCase();
+        boolean negative = s.startsWith("-");
+        if (negative || s.startsWith("+"))
+            s = s.substring(1);
+        if (s.equals("nan"))
+            return Double.NaN;
+        if (s.equals("inf") || s.equals("infinity"))
+            return negative ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+        return null;
+    }
+
     static Object fromStrings(int type, String[] v, SDDSEnumDefinition definition) {
         Object out = newArray(type, v.length);
         for (int i = 0; i < v.length; i++) {
@@ -201,7 +214,9 @@ final class SDDSValues {
                 case SDDSUtil.SDDS_FLOAT:
                 case SDDSUtil.SDDS_DOUBLE:
                     try {
-                        ((double[]) out)[i] = type == SDDSUtil.SDDS_FLOAT ? Float.parseFloat(s) : Double.parseDouble(s);
+                        Double nonFinite = nonFinite(s);
+                        ((double[]) out)[i] = nonFinite != null ? nonFinite
+                                : type == SDDSUtil.SDDS_FLOAT ? Float.parseFloat(s) : Double.parseDouble(s);
                     } catch (Exception e) {
                         ((double[]) out)[i] = 0;
                     }

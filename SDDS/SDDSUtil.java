@@ -268,6 +268,36 @@ public class SDDSUtil {
 	}
 
 	/**
+	 * Returns the text to store as a parameter's fixed value for a value as a user sees
+	 * it. Numbers are stored as they are, with blank meaning zero. In strings and
+	 * characters, bytes that the header reader would alter are written as octal escapes.
+	 *
+	 * @param value the value
+	 * @param type  the parameter's data type
+	 * @return text for <code>SDDSFile.defineParameter</code>
+	 */
+	public static String fixedValueText(String value, int type) {
+		if (isNumericType(type))
+			return value.trim().isEmpty() ? "0" : value;
+		byte[] bytes;
+		if (type == SDDS_CHARACTER)
+			bytes = value.isEmpty() ? new byte[] { 0 } : new byte[] { (byte) value.charAt(0) };
+		else
+			bytes = SDDSText.encode(value);
+		StringBuilder out = new StringBuilder();
+		for (byte b : bytes) {
+			int c = b & 0xff;
+			if (c <= 32 || c > 126 || c == '\\' || c == '"' || c == '!' || c == '&') {
+				String octal = Integer.toOctalString(c);
+				out.append('\\').append("000", 0, 3 - octal.length()).append(octal);
+			} else {
+				out.append((char) c);
+			}
+		}
+		return out.toString();
+	}
+
+	/**
 	 * Verify that format string is valid, by the same rules as the C library. Enums
 	 * take no format string, so none is valid for them.
 	 *
